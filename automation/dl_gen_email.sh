@@ -16,20 +16,23 @@ do
         printf -v date_str '%(%Y-%m-%d)T\n' -1
         python3 generate_overview.py -i $filename -d $date_str > output_data.tmp
 	python_exec_code=$?
-	cat output_data.tmp
+	python_output=$(cat output_data.tmp)
+	rm output_data.tmp
+	echo "$python_output"
 	if [[ $python_exec_code -eq 0 ]]; then
 		currentdate=`date +%A\ %b\ %d,\ %Y`
-		output_filename=$(tail -n 1 output_data.tmp)
-		email_addresses=$(cat email_data/email_addresses.txt)
+		output_filename=$(echo "$python_output" | tail -n 1)
 		email_subjectline="$(cat email_data/email_subjectline.txt) - ${currentdate}"
-		mutt -s "$email_subjectline" -a "$output_filename" -- $email_addresses < email_data/email_text.txt
+		mutt -s "$email_subjectline" -a "$output_filename" -- $(cat email_data/email_addresses.txt) < email_data/email_text.txt
 		echo Success
 		/usr/bin/notify-send -u critical "SUCCESS" "Daily pond overview generated for ${currentdatetime}"
 	else
 		echo Failure
 		/usr/bin/notify-send -u critical "FAILURE" "Daily pond overview failed for ${currentdatetime}"
+		echo "Dashboard generation failed for ${currentdatetime}."$'\nPython log:\n'"${python_output}" > failure_email_text.tmp
+		mutt -s "FAILURE: dashboard generation" -- $(cat email_data/failure_email_address.txt) < failure_email_text.tmp
+		rm failure_email_text.tmp 
 	fi
-	rm output_data.tmp
 	exit 0
     fi
 done

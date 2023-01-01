@@ -4,7 +4,6 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-
 import sys
 import re
 import argparse
@@ -416,4 +415,3 @@ if __name__ == '__main__':
         pass
     else:
         main(sys.argv[1:])
-   
