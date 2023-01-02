@@ -14,10 +14,8 @@ do
 	filename="./data-sources/dailyscorecard.xlsx"
 	source /home/zack/Documents/Python-Projects/dashboard/venv/bin/activate
         printf -v date_str '%(%Y-%m-%d)T\n' -1
-        python3 generate_overview.py -i $filename -d $date_str > output_data.tmp
+        python_output=$(python3 generate_overview.py -i $filename -d $date_str)
 	python_exec_code=$?
-	python_output=$(cat output_data.tmp)
-	rm output_data.tmp
 	echo "$python_output"
 	if [[ $python_exec_code -eq 0 ]]; then
 		currentdate=`date +%A\ %b\ %d,\ %Y`
@@ -29,9 +27,8 @@ do
 	else
 		echo Failure
 		/usr/bin/notify-send -u critical "FAILURE" "Daily pond overview failed for ${currentdatetime}"
-		echo "Dashboard generation failed for ${currentdatetime}."$'\nPython log:\n'"${python_output}" > failure_email_text.tmp
-		mutt -s "FAILURE: dashboard generation" -- $(cat email_data/failure_email_address.txt) < failure_email_text.tmp
-		rm failure_email_text.tmp 
+		echo "Dashboard generation failed for ${currentdatetime}."$'\nPython log:\n'"${python_output}" | \
+		mutt -s "FAILURE: dashboard generation" -- $(cat email_data/failure_email_address.txt)
 	fi
 	exit 0
     fi
