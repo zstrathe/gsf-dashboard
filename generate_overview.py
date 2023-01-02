@@ -8,7 +8,6 @@ import sys
 import re
 import argparse
 
-
 def main(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument("-i","--input_file", required=True, help="Excel (.xls or .xlsx) input file")
@@ -56,18 +55,10 @@ def main(argv):
             sys.exit(2)
     
     print('Loading data...')
-    try:
-        overview = ponds_overview(excel_filename = args.input_file)
-    except:
-        print('Error loading data')
-        sys.exit(1) # exit with return value 1 to indicate error
+    overview = ponds_overview(excel_filename = args.input_file)
     print('Plotting data...')
-    try:
-        overview.plot(select_date=args.date, target_to_density=args.target_density, save_output=True)
-    except:
-        print('Error plotting data')
-        sys.exit(1) # exit with return value 1 to indicate error
-    sys.exit(0)
+    overview.plot(select_date=args.date, target_to_density=args.target_density, save_output=True) 
+    sys.exit(0) # exit with status 0 to indicate successful execution
     
 class ponds_overview:
     def __init__(self, excel_filename):
@@ -385,8 +376,7 @@ class ponds_overview:
                         print_string += '\n'
                     print_string +=  r'$\bf{Suggested\/\/harvest\/\/mass:} $' + f'{target_harvest_mass:,} kg'
                     print_string += '\n' + r'$\bf{Suggested\/\/harvest\/\/volume:} $' + f'{target_harvest_gals:,.0f} gallons'
-                    t = ax.text(1.1,1, print_string, ha='left', va='top', fontsize=14, multialignment='left') 
-                
+                    t = ax.text(1.1,1, print_string, ha='left', va='top', fontsize=14, multialignment='left')               
                 elif 'BLANK ROW 2-1' in pond_name:
                     print_string = (r'$\bf{Harvest\/\/Depth} = \frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
                                     '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
