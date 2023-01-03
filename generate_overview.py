@@ -121,17 +121,13 @@ class ponds_overview:
                 elif i == num_days_prior and check_active_query(i) == False:
                     return False
         
-        # helper function to query data points from each pond dataframe
+        # helper function to query single data points from each pond dataframe
         def data_query(pond_data, pond_name, query_name):
             # Select the data to return for each query
             # convert to float to catch exception of an empty dataframe being returned (will be Inactive/Error from try/except statement that calls this function)
             return_data = None
 
-            if query_name == 'pests_sum':
-                return_data = float(pond_data[['Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
-                    'Tetra','Green Algae']].sum(axis=1))
-
-            elif query_name == 'afdw':
+            if query_name == 'afdw':
                 return_data = pond_data['AFDW (filter)']
                 if return_data == 0: # if 0, set as None to be flagged as "No data"
                     return_data = None
@@ -187,7 +183,7 @@ class ponds_overview:
 
             elif query_name == 'growth':
                 return_data = None
-
+          
             # Check if pond data is n/a
             if pd.isna(return_data):
                 return "No data"
@@ -217,6 +213,122 @@ class ponds_overview:
                 return f'{data_list[0]}:\n{data_list[1]}'
             else:
                 return f'{data_list[0]}:\n{data_list[1]:,}'
+        
+        def get_pests_format(pond_data, pond_name):
+            pests_df = pond_data[['Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
+                    'Tetra','Green Algae']].fillna(0)
+            # key for pests, each value a list with threshold for flagging (when >= threshold) and the color to format as
+            pest_key = {'Rotifers ': [0,'blue'],   
+                        'Attached FD111': [0,'red'],    
+                        'Free Floating FD111': [0,'yellow'],  
+                        'Golden Flagellates': [0,'purple'], 
+                        'Diatoms': [0,'cyan'],
+                        'Tetra': [0,'orange'],
+                        'Green Algae': [0,'green']} 
+            colors_list = []
+            for idx, (key, val) in enumerate(pest_key.items()):
+                threshold = val[0]
+                if pests_df[key] >= threshold:
+                    colors_list.append(val[1])
+            return colors_list
+        
+        def plot_each_pond(fig, pond_plot, pond_name, select_date):
+            inner_plot = gridspec.GridSpecFromSubplotSpec(4,3,subplot_spec=pond_plot, wspace=0, hspace=0)
+
+            # setup data dict as: query_string: [data_label, data_point]
+            data_dict = {'afdw':['AFDW', None],
+                         'depth':['Depth', None], 
+                         'harvestable_mass':['Avail. to\nHarvest (kg)', None],
+                         'growth':['Growth',None],
+                         'pests':['Pests',None] 
+                         }
+
+            # Check prior 5 days of data to see if pond is active/in-use
+            pond_active = check_active(pond_name, 5)
+
+            try:
+                pond_data = self.ponds_data[pond_name]
+                pond_data_error = False
+            except:
+                pond_data_error = True
+
+            if pond_active == True:
+                date_pond_data = pond_data.loc[select_date] # get dataframe for individual pond
+
+                # Query the data and update in data_dict
+                for idx, (key, value) in enumerate(data_dict.items()):
+                    query_name = key
+                    value[1] = data_query(date_pond_data, pond_name, query_name)
+
+                # Query and format (color code) of pests for each pond
+                pond_pest_colors = get_pests_format(date_pond_data, pond_name)
+
+                # set fill color based on afdw for now
+                fill_color = get_fill_color(data_dict['afdw'][1], 'afdw_colors') 
+
+            # Get the last harvest date for each pond, done separately from other data queries due to needing all dates
+            try:
+                pond_last_harvest = str(pond_data['Split Innoculum'].last_valid_index().date())
+            except:
+                pond_last_harvest = 'n/a'
+
+            data_displays = ['title', ['depth', 'afdw'], 'harvestable_mass', 'growth']
+            for idx, item in enumerate(data_displays):
+                if item == 'title':
+                    # title subplot
+                    ax = plt.Subplot(fig, inner_plot[0,:])
+                    t = ax.text(0.5, 0.001, r'$\bf{' + pond_name + '}$' + f'\nlast harvest/split: {pond_last_harvest}', 
+                                ha = 'center', va='bottom')
+                    # Display pond pest info next to subplot title
+                    try:
+                        start_x = 0.64
+                        x_space = 0.05
+                        for c in pond_pest_colors:
+                            t = ax.text(start_x, 0.33, '*', ha='center', va='bottom', color=c, fontweight='bold', fontsize=17)
+                            start_x += x_space
+                    except: 
+                        pass # if pond isn't active i.e., nothing to display
+                    #ax.set_facecolor('whitesmoke')
+                else:
+                    # data subplots
+                    ax = plt.Subplot(fig, inner_plot[1:,idx-1])
+                    
+                    # format data list item with a newline separator if there's more than one item (i.e., for 'depth' and 'afdw')
+                    if pond_active == True: 
+                        if type(item) == list:
+                            text_formatted = ''
+                            for idx, subitem in enumerate(item):
+                                text_formatted += text_display_format(data_dict[subitem])
+                                if idx+1 != len(item):
+                                    text_formatted += '\n'
+                        else:
+                            text_formatted = text_display_format(data_dict[item])
+
+                        # Plot data text for each item
+                        t = ax.text(0.5, 0.5, text_formatted, ha='center', va='center')
+
+                        ax.set_facecolor(fill_color)
+
+                    else: # if pond is inactive or data_error
+                        if idx == 2: # plot in the middle of the lower 3 subplots
+                            if pond_data_error == True:
+                                t = ax.text(0.5, 1, 'Data Error', ha='center', va='top')
+                            else:
+                                t = ax.text(0.5, 1, 'Inactive', ha='center', va='top')
+                        ax.set_facecolor('snow')
+
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+                ax.spines['bottom'].set_visible(False)
+                ax.spines['left'].set_visible(False)
+                ax.get_xaxis().set_ticks([])
+                ax.get_yaxis().set_ticks([])
+                fig.add_subplot(ax)
+            
+            
+        ##############################
+        ### START OF PLOTTING CODE ###
+        ##############################
 
         n_rows_small = 12
         n_rows_large = 10
@@ -240,10 +352,10 @@ class ponds_overview:
                     else:
                         row.append(f'{idx_row+1}0{col}')
             else: # append blanks for the two large columns with only 10 rows 
-                [row.append('BLANK') for i in range(n_cols_large)]
+                [row.append(f'BLANK {idx_row+1}-{c}') for c in [6,8]]
                  
         # Add 2 blank rows at end to make room for extra data aggregations to be listed        
-        [title_labels.append([f'BLANK ROW {i}-{j}' for j in range(1,7)]) for i in range(1,3)]
+        [title_labels.append([f'BLANK {r}-{c}' for c in range(1,7)]) for r in range(13,15)]
         
         # flatten title_labels for indexing from plot gridspec plot generation
         flat_title_labels = [label for item in title_labels for label in item]
@@ -253,113 +365,46 @@ class ponds_overview:
         outer_plots = gridspec.GridSpec(len(title_labels), len(title_labels[0]), wspace=0.05, hspace=0.4)
 
         fig.suptitle(f'{plot_title}\n{select_date}', fontweight='bold', fontsize=16, y=0.91)
-
-        legend_added_flag = False # flag for making sure legend is plotted just once
         
         total_available_to_harvest = 0 # keep track of total available for harvest across all ponds
 
         for idx_plot, pond_plot in enumerate(outer_plots):
             pond_name = flat_title_labels[idx_plot]
             if 'BLANK' not in pond_name:
-                inner_plot = gridspec.GridSpecFromSubplotSpec(4,3,subplot_spec=pond_plot, wspace=0, hspace=0)
+                
+                # plot each pond with a function to ensure that data for each is isolated within a local scope
+                plot_each_pond(fig, pond_plot, pond_name, select_date)
 
-                # setup data dict as: query_string: [data_label, data_point]
-                data_dict = {'afdw':['AFDW', None],
-                             'depth':['Depth', None], 
-                             'harvestable_mass':['Avail. to\nHarvest (kg)', None],
-                             'growth':['Growth',None]
-                             }
-                
-                # Initialize pond data (to prevent data from previous loop being used)
-                pond_data = None
-                
-                # Check prior 5 days of data to see if pond is active/in-use
-                pond_active = check_active(pond_name, 5)
-                
-                try:
-                    pond_data = self.ponds_data[pond_name]
-                    pond_data_error = False
-                except:
-                    pond_data_error = True
-                
-                if pond_active == True:
-                    date_pond_data = pond_data.loc[select_date] # get dataframe for individual pond
-                    
-                    # Query the data and update in data_dict
-                    for idx, (key, value) in enumerate(data_dict.items()):
-                        query_name = key
-                        value[1] = data_query(date_pond_data, pond_name, query_name)
-                    
-                    # set fill color based on afdw for now
-                    fill_color = get_fill_color(data_dict['afdw'][1], 'afdw_colors') 
-                    
-                # Get the last harvest date for each pond, done separately from other data queries due to needing all dates
-                try:
-                    pond_last_harvest = str(pond_data['Split Innoculum'].last_valid_index().date())
-                except:
-                    pond_last_harvest = 'n/a'
-                
-                data_displays = ['title', ['depth', 'afdw'], 'harvestable_mass', 'growth']
-                for idx, item in enumerate(data_displays):
-                    if item == 'title':
-                        # title subplot
-                        ax = plt.Subplot(fig, inner_plot[0,:])
-                        t = ax.text(0.5, 0.001, r'$\bf{' + pond_name + '}$' + f'\nlast harvest/split: {pond_last_harvest}', 
-                                    ha = 'center', va='bottom')
-                    else:
-                        # data subplots
-                        ax = plt.Subplot(fig, inner_plot[1:,idx-1])
-                                
-                        if pond_active == True: 
-                            if type(item) == list:
-                                text_formatted = ''
-                                for idx, subitem in enumerate(item):
-                                    text_formatted += text_display_format(data_dict[subitem])
-                                    if idx+1 != len(item):
-                                        text_formatted += '\n'
-                            else:
-                                text_formatted = text_display_format(data_dict[item])
-                            
-                            # Plot data text for each item
-                            t = ax.text(0.5, 0.5, text_formatted, ha='center', va='center')
-                            
-                            ax.set_facecolor(fill_color)
-                            
-                        else: # if pond is inactive or data_error
-                            if idx == 2: # plot in the middle of the lower 3 subplots
-                                if pond_data_error == True:
-                                    t = ax.text(0.5, 1, 'Data Error', ha='center', va='top')
-                                else:
-                                    t = ax.text(0.5, 1, 'Inactive', ha='center', va='top')
-                            ax.set_facecolor('snow')
-
-                    ax.spines['top'].set_visible(False)
-                    ax.spines['right'].set_visible(False)
-                    ax.spines['bottom'].set_visible(False)
-                    ax.spines['left'].set_visible(False)
-                    ax.get_xaxis().set_ticks([])
-                    ax.get_yaxis().set_ticks([])
-                    fig.add_subplot(ax)
-            else: # for plotting subplots labeled 'BLANK' in 'title_labels' (the four lower right subplots) and the BLANK DATA rows
+            else: # for plotting subplots labeled 'BLANK' in 'title_labels' list:  (the four lower right subplots) and the BLANK rows
                 ax = plt.Subplot(fig, pond_plot)
                 ax.axis('off')
-                if legend_added_flag == False: # plot the legend in the first blank subplot
-                    text_test = ("(AFDW):\n"
+                if 'BLANK 11-6' in pond_name: # plot the legend in the first blank subplot
+                    legend_text = ("Color key (AFDW):\n"
 
                                                        "0 - 0.24:                           Red\n"
                                                        "0.25 - 0.49:                      Yellow\n"
                                                        "0.50 - 0.79:                      Light Green\n"
                                                        "0.80 and up:                    Dark Green\n"
                                                        "No data for current day:  Grey")
-                    t = ax.text(0.999,0.001,f'Color key {text_test}',ha='center', va='center', 
+                    t = ax.text(0.1,0.5,legend_text,ha='left', va='center', 
                            bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
-                    legend_added_flag = True # set to true so the legend isn't plotted again
-                elif 'BLANK ROW 1-1' in pond_name:
+                if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot
+                    pests_text = ("Color key (Pests):\n"
+                                  "Rotifers:                      Blue\n"
+                                  "Attached FD111:         Red\n"
+                                  "Free Floating FD111:  Yellow\n"
+                                  "Golden Flagellates:     Purple\n"
+                                  "Diatoms:                     Cyan\n"
+                                  "Tetra:                           Orange\n"
+                                  "Green Algae:               Green") 
+                    t = ax.text(0.1,0.5,pests_text,ha='left', va='center', 
+                           bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
+                elif 'BLANK 13-1' in pond_name:
                     print_string = (r'$\bf{Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
                                    + r'$\bf{Total\/\/mass\/\/(all\/\/ponds):}$' + f'{total_mass_all:,} kg')
                     t = ax.text(0,1, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
                     bottom_data_added_flag = True
-                elif 'BLANK ROW 1-3' in pond_name:
+                elif 'BLANK 13-3' in pond_name:
                     # sort the suggested_harvests dict by the pond column first (last 2 digits of name)
                     suggested_harvests = dict(sorted(suggested_harvests.items(), key=lambda item: item[0][-2:]))
                     # generate a formatted string for displaying
@@ -377,14 +422,14 @@ class ponds_overview:
                     print_string +=  r'$\bf{Suggested\/\/harvest\/\/mass:} $' + f'{target_harvest_mass:,} kg'
                     print_string += '\n' + r'$\bf{Suggested\/\/harvest\/\/volume:} $' + f'{target_harvest_gals:,.0f} gallons'
                     t = ax.text(1.1,1, print_string, ha='left', va='top', fontsize=14, multialignment='left')               
-                elif 'BLANK ROW 2-1' in pond_name:
+                elif 'BLANK 14-1' in pond_name:
                     print_string = (r'$\bf{Harvest\/\/Depth} = \frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
                                     '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
                                     '\n' + r'$\bf{Target\/\/Harvest\/\/Down\/\/to\/\/AFDW}: $' + str(target_to_density) + 
                                     '\n' + r'$\bf{Target\/\/Top\/\/Off\/\/Depth}: $' + str(target_topoff_depth) + '"')
                     t = ax.text(0,.8, print_string, ha='left', va='top', fontsize=16) 
                     
-                elif 'BLANK ROW 2-3' in pond_name:
+                elif 'BLANK 14-3' in pond_name:
                     print_string = (r'$\bf{Harvestable\/\/Mass} = Harvest\/\/Depth * 132,489 (\frac{liters}{inch}) * Current\/\/AFDW$'
                                     + '\n                                   (doubled for 06 and 08 columns)')
                     t = ax.text(1.25,.8, print_string, ha='left', va='top', fontsize=16) 
@@ -399,7 +444,6 @@ class ponds_overview:
         
 
 if __name__ == '__main__':   
-    
     # detect if running in jupyter notebook (for development & testing)
     if 'ipykernel_launcher.py' in sys.argv[0]:
         pass
