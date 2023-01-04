@@ -218,13 +218,13 @@ class ponds_overview:
             pests_df = pond_data[['Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
                     'Tetra','Green Algae']].fillna(0)
             # key for pests, each value a list with threshold for flagging (when >= threshold) and the color to format as
-            pest_key = {'Rotifers ': [0,'blue'],   
-                        'Attached FD111': [0,'red'],    
-                        'Free Floating FD111': [0,'yellow'],  
-                        'Golden Flagellates': [0,'purple'], 
-                        'Diatoms': [0,'cyan'],
-                        'Tetra': [0,'orange'],
-                        'Green Algae': [0,'green']} 
+            pest_key = {'Rotifers ': [0.01,'blue'],   
+                        'Attached FD111': [0.01,'red'],    
+                        'Free Floating FD111': [0.01,'deeppink'],  
+                        'Golden Flagellates': [0.01,'purple'], 
+                        'Diatoms': [0.01,'cyan'],
+                        'Tetra': [0.01,'orange'],
+                        'Green Algae': [0.01 ,'green']} 
             colors_list = []
             for idx, (key, val) in enumerate(pest_key.items()):
                 threshold = val[0]
@@ -389,10 +389,10 @@ class ponds_overview:
                     t = ax.text(0.1,0.5,legend_text,ha='left', va='center', 
                            bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
                 if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot
-                    pests_text = ("Color key (Pests):\n"
+                    pests_text = ("Color key (Pests > 0):\n"
                                   "Rotifers:                      Blue\n"
                                   "Attached FD111:         Red\n"
-                                  "Free Floating FD111:  Yellow\n"
+                                  "Free Floating FD111:  Pink\n"
                                   "Golden Flagellates:     Purple\n"
                                   "Diatoms:                     Cyan\n"
                                   "Tetra:                           Orange\n"
