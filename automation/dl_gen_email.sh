@@ -1,6 +1,6 @@
 #!/bin/bash
 currentdatetime=`date +%A,\ %b\ %d,\ %Y\ %I:%M\ %p`
-currentdate=`date +%a\ %b\ %e,\ %Y`
+currentdate=`date +%a\ %b\ %-d,\ %Y`
 echo '****************************** LOG:' ${currentdatetime} '******************************'
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 cd $SCRIPT_DIR; cd ../
@@ -35,7 +35,7 @@ echo "$python_output"
 if [[ $python_exec_code -eq 0 ]]; then
     output_filename=$(echo "$python_output" | tail -n 1)
     email_subjectline="$(cat automation/email_data/email_subjectline.txt) - ${currentdate}"
-    mutt -s "$email_subjectline" -a "$output_filename" -- $(cat automation/email_data/email_addresses-test.txt) < automation/email_data/email_text.txt
+    mutt -s "$email_subjectline" -a "$output_filename" -- $(cat automation/email_data/email_addresses.txt) < automation/email_data/email_text.txt
     if [[ $? -eq 0 ]]; then
         echo "Successfully generated and emailed file"
 	exit 0

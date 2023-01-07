@@ -212,24 +212,8 @@ class ponds_overview:
             else: 
                 return return_data
         
-        # helper function to get the fill color for each pond plot
-        def get_fill_color(disp_data, color_dict): # helper function for getting the fill color for each pond subplot
-            if disp_data == 'No data':
-                return 'lightgrey'
-            
-            color_dict_all = {'pests_colors' : {(0,0.0000000001):'tab:green', (0,0.4999999999): 'tab:orange', (0.5,9999999): 'tab:red'},
-                              'afdw_colors' : {(0,0.249999999):'tab:red', (0.25,0.499999999): 'yellow',
-                                                        (0.50,0.799999999): 'mediumspringgreen', (0.80,999999999): 'tab:green'}
-                             }
-            color_dict = color_dict_all[color_dict]
-
-            
-            for idx, (key, val) in enumerate(color_dict.items()):
-                if disp_data >= key[0] and disp_data < key[1]:
-                    return val
-        
         # helper function for formatting text of pond data
-        def text_display_format(data_list): 
+        def data_display_format(data_list): 
             # check whether data is a string, if not, then format with a ',' separator for thousands
             if type(data_list[1]) == str:
                 return f'{data_list[0]}:\n{data_list[1]}'
@@ -269,22 +253,30 @@ class ponds_overview:
                 pests_df = date_pond_data[['Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
                                     'Tetra','Green Algae']].fillna(0)
                 # key for pests, each value a list with threshold for flagging (when >= threshold) and the color to format as
-                pest_key = {'Rotifers ': [0.01, 'R', 'xkcd:deep sky blue'],   
+                pest_dict = {'Rotifers ': [0.01, 'R', 'xkcd:deep sky blue'],   
                             'Attached FD111': [0.01, 'FD\nA', 'xkcd:poo brown'],    
                             'Free Floating FD111': [0.01, 'FD\nFF', 'orange'],  
-                            'Golden Flagellates': [0.01, 'GF', 'purple'], 
+                            'Golden Flagellates': [0.01, 'GF', 'y'], 
                             'Diatoms': [0.01, 'D', 'xkcd:fire engine red'],
-                            'Tetra': [0.01, 'T', 'deeppink'],
+                            'Tetra': [0.01, 'T', 'purple'],
                             'Green Algae': [0.01 , 'GA', 'green']} 
                 pond_pest_data = []
-                for idx, (key, val) in enumerate(pest_key.items()):
+                for idx, (key, val) in enumerate(pest_dict.items()):
                     threshold = val[0]
                     if pests_df[key] >= threshold:
                         pond_pest_data.append([val[1], val[2]])
                 
-                # set fill color based on afdw for now
-                fill_color = get_fill_color(data_dict['afdw'][1], 'afdw_colors') 
-
+                # set fill color based on density (afdw) for now
+                density_data = data_dict['afdw'][1] # set density_data as the current pond density (AFDW) value to set subplot color val
+                if density_data == 'No data':
+                    fill_color = 'lightgrey'
+                else:    
+                    density_color_dict = {(0,0.249999999):'red', (0.25,0.499999999): 'yellow',
+                                        (0.50,0.799999999): 'mediumspringgreen', (0.80,999999999): 'tab:green'}
+                    for idx, (key, val) in enumerate(density_color_dict.items()):
+                        if density_data >= key[0] and density_data < key[1]:
+                            fill_color = val 
+                
             # Get the last harvest date for each pond, done separately from other data queries due to needing all dates
             try:
                 pond_last_harvest = str(pond_data['Split Innoculum'].last_valid_index().date().strftime('%-m-%-d-%Y'))
@@ -308,7 +300,7 @@ class ponds_overview:
                     circle_height = .07 * maxd / dy
                     
                     ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
-                    ax.text(0.5, 0.48, f'last harvest/split: {pond_last_harvest}', ha='center', va='center')
+                    ax.text(0.5, 0.5, f'last harvest/split: {pond_last_harvest}', ha='center', va='center')
                     # Display pond pest info under subplot title
                     try:
                         num_pest_data = len(pond_pest_data)*(circle_width+.01)
@@ -318,8 +310,8 @@ class ponds_overview:
                         if num_pest_data > 0: 
                             ax.text(calc_start_x - 0.05,pest_plot_y, 'Pests:', ha='right', va='center')
                         for [pest,color] in pond_pest_data:
-                            ax.add_patch(Ellipse((calc_start_x, pest_plot_y + 0.02), circle_width, circle_height, color=color, fill=None))
-                            ax.text(calc_start_x, pest_plot_y, pest, color=color, ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
+                            ax.add_patch(Ellipse((calc_start_x, pest_plot_y + 0.02), circle_width, circle_height, color=color, fill=color))
+                            ax.text(calc_start_x, pest_plot_y, pest, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
                             calc_start_x += x_space
                         
                     except: 
@@ -334,11 +326,11 @@ class ponds_overview:
                         if type(item) == list:
                             text_formatted = ''
                             for idx, subitem in enumerate(item):
-                                text_formatted += text_display_format(data_dict[subitem])
+                                text_formatted += data_display_format(data_dict[subitem])
                                 if idx+1 != len(item):
                                     text_formatted += '\n'
                         else:
-                            text_formatted = text_display_format(data_dict[item])
+                            text_formatted = data_display_format(data_dict[item])
 
                         # Plot data text for each item
                         t = ax.text(0.5, 0.5, text_formatted, ha='center', va='center')
@@ -348,9 +340,9 @@ class ponds_overview:
                     else: # if pond is inactive or data_error
                         if idx == 2: # plot in the middle of the lower 3 subplots
                             if pond_data_error == True:
-                                t = ax.text(0.5, 1, 'Data Error', ha='center', va='top')
+                                t = ax.text(0.5, 0.9, 'Data Error', ha='center', va='top')
                             else:
-                                t = ax.text(0.5, 1, 'Inactive', ha='center', va='top')
+                                t = ax.text(0.5, 0.9, 'Inactive', ha='center', va='top')
                         ax.set_facecolor('snow')
 
                 ax.spines['top'].set_visible(False)
@@ -404,7 +396,7 @@ class ponds_overview:
         outer_plots = gridspec.GridSpec(len(title_labels), len(title_labels[0]), wspace=0.05, hspace=0.1)
         
         title_date = '/'.join([select_date.split('-')[i].lstrip('0') for i in [1,2,0]])
-        fig.suptitle(f'{plot_title}\n{title_date}', fontweight='bold', fontsize=16, y=0.91)
+        fig.suptitle(f'{plot_title}\n{title_date}', fontweight='bold', fontsize=16, y=0.905)
         
         total_available_to_harvest = 0 # keep track of total available for harvest across all ponds
 
@@ -433,9 +425,9 @@ class ponds_overview:
                                   "Rotifers:                      R (blue)\n"
                                   "Attached FD111:         FD-A (brown)\n"
                                   "Free Floating FD111:  FD-FF (orange)\n"
-                                  "Golden Flagellates:     GF (purple)\n"
+                                  "Golden Flagellates:     GF (yellow)\n"
                                   "Diatoms:                     D (red)\n"
-                                  "Tetra:                           T (pink)\n"
+                                  "Tetra:                           T (purple)\n"
                                   "Green Algae:               GA (green)") 
                     t = ax.text(0.1,0.5,pests_text,ha='left', va='center', 
                            bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
@@ -478,7 +470,7 @@ class ponds_overview:
                 
                 fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
         
-        out_filename = f'./output_files/{plot_title}-{select_date}.pdf'
+        out_filename = f'./output_files/{plot_title} {select_date}.pdf'
         if save_output == True:
             plt.savefig(out_filename, bbox_inches='tight')
         fig.show() 
