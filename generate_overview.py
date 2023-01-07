@@ -4,6 +4,8 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.patches import Ellipse
+import matplotlib.colors as mcolors
 import sys
 import re
 import argparse
@@ -54,15 +56,19 @@ def main(argv):
             print("ERROR: target density (AFDW) should be between 0 and 1")
             sys.exit(2)
     
+    overview = ponds_overview()
     print('Loading data...')
-    overview = ponds_overview(excel_filename = args.input_file)
+    ponds_data = overview.load_data(excel_filename = args.input_file)
     print('Plotting data...')
-    overview.plot(select_date=args.date, target_to_density=args.target_density, save_output=True) 
+    ''' plot() method will return the output filename, so save it as a variable, then print it so that bash automation script 
+        can access it from the last line of python stdout '''
+    out_filename = overview.plot(ponds_data=ponds_data, select_date=args.date, target_to_density=args.target_density) 
+    print(f'Plot saved to:\n{out_filename}')
     sys.exit(0) # exit with status 0 to indicate successful execution
     
 class ponds_overview:
-    def __init__(self, excel_filename):
-        self.ponds_data = self.load_data(excel_filename)
+    def __init__(self):
+        pass
         
     def load_data(self, excel_filename):
         # Load the Daily Pond Scorecard excel file
@@ -93,7 +99,7 @@ class ponds_overview:
             updated_ponds[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
         return updated_ponds # return the cleaned data dict
 
-    def plot(self, select_date, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, save_output=False, plot_title='Pond Health Overview'): 
+    def plot(self, ponds_data, select_date, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, save_output=True, plot_title='Pond Health Overview'): 
         # Initialize variables for aggregations
         total_mass_all = 0 # total mass for entire farm (regardless of density)
         total_harvestable_mass = 0 # all available mass with afdw > target_to_density
@@ -101,25 +107,41 @@ class ponds_overview:
         target_harvest_gals = 0 # target_harvest_mass in terms of volume in gallons
         suggested_harvests = {} # dict to store calculated harvest depths for ponds with density >= harvest_density
         num_active_ponds = 0 # number of active ponds (defined by the plot_ponds().check_active() function)
+        num_active_ponds_sm = 0 # number of active 1.1 acre ponds
+        num_active_ponds_lg = 0 # number of active 2.2 acre ponds
+        
         
         # helper function to check if a pond has data from prior n-days from the selected date 
-        def check_active(pond_name, num_days_prior):
-            def check_active_query(prev_days): 
+        def check_active(ponds_data, pond_name, num_days_prior):
+            def check_active_query(prev_day_n): 
                 try:
-                    dat = self.ponds_data[pond_name]['Fo'].shift(prev_days).loc[select_date]
-                    if pd.isna(dat) or dat == 0:
+                    dat = ponds_data[pond_name][['Fo','Split Innoculum']].shift(prev_day_n).loc[select_date]
+                    if pd.isna(dat[1]) == False:
+                        if dat[1].upper() == 'I': # check if pond is noted as "I" for inactive, if so, break immediately and return False in the outer function
+                            return 'FalseBreakImmediate'
+                    elif pd.isna(dat[0]) or dat[0] == 0:
                         return False
                     else:
                         return True
                 except:
                     return False
-            for i in range(1,num_days_prior+1):
-                if check_active_query(i) == True:
-                    nonlocal num_active_ponds
+            for n in range(0,num_days_prior+1):
+                prev_n_day_active = check_active_query(n)
+                if prev_n_day_active == True:
+                    nonlocal num_active_ponds, num_active_ponds_sm, num_active_ponds_lg
+                    #check if pond is in the '06' or '08' column by checking the last values in name
+                    if pond_name[2:] == '06' or pond_name[2:] == '08':
+                        num_active_ponds_lg += 1
+                    else:
+                        num_active_ponds_sm += 1
                     num_active_ponds += 1
                     return True
-                elif i == num_days_prior and check_active_query(i) == False:
+                elif prev_n_day_active == 'FalseBreakImmediate':
                     return False
+                elif n == num_days_prior and prev_n_day_active == False:
+                    return False
+                else:
+                    pass
         
         # helper function to query single data points from each pond dataframe
         def data_query(pond_data, pond_name, query_name):
@@ -214,26 +236,9 @@ class ponds_overview:
             else:
                 return f'{data_list[0]}:\n{data_list[1]:,}'
         
-        def get_pests_format(pond_data, pond_name):
-            pests_df = pond_data[['Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
-                    'Tetra','Green Algae']].fillna(0)
-            # key for pests, each value a list with threshold for flagging (when >= threshold) and the color to format as
-            pest_key = {'Rotifers ': [0.01,'blue'],   
-                        'Attached FD111': [0.01,'red'],    
-                        'Free Floating FD111': [0.01,'deeppink'],  
-                        'Golden Flagellates': [0.01,'purple'], 
-                        'Diatoms': [0.01,'cyan'],
-                        'Tetra': [0.01,'orange'],
-                        'Green Algae': [0.01 ,'green']} 
-            colors_list = []
-            for idx, (key, val) in enumerate(pest_key.items()):
-                threshold = val[0]
-                if pests_df[key] >= threshold:
-                    colors_list.append(val[1])
-            return colors_list
-        
-        def plot_each_pond(fig, pond_plot, pond_name, select_date):
-            inner_plot = gridspec.GridSpecFromSubplotSpec(4,3,subplot_spec=pond_plot, wspace=0, hspace=0)
+        # function to plot each pond to ensure that data for each plot is kept within a local scope
+        def plot_each_pond(ponds_data, fig, pond_plot, pond_name, select_date):
+            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=0, hspace=0)
 
             # setup data dict as: query_string: [data_label, data_point]
             data_dict = {'afdw':['AFDW', None],
@@ -244,10 +249,10 @@ class ponds_overview:
                          }
 
             # Check prior 5 days of data to see if pond is active/in-use
-            pond_active = check_active(pond_name, 5)
+            pond_active = check_active(ponds_data, pond_name, 5)
 
             try:
-                pond_data = self.ponds_data[pond_name]
+                pond_data = ponds_data[pond_name]
                 pond_data_error = False
             except:
                 pond_data_error = True
@@ -261,14 +266,28 @@ class ponds_overview:
                     value[1] = data_query(date_pond_data, pond_name, query_name)
 
                 # Query and format (color code) of pests for each pond
-                pond_pest_colors = get_pests_format(date_pond_data, pond_name)
-
+                pests_df = date_pond_data[['Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
+                                    'Tetra','Green Algae']].fillna(0)
+                # key for pests, each value a list with threshold for flagging (when >= threshold) and the color to format as
+                pest_key = {'Rotifers ': [0.01, 'R', 'xkcd:deep sky blue'],   
+                            'Attached FD111': [0.01, 'FD\nA', 'xkcd:poo brown'],    
+                            'Free Floating FD111': [0.01, 'FD\nFF', 'orange'],  
+                            'Golden Flagellates': [0.01, 'GF', 'purple'], 
+                            'Diatoms': [0.01, 'D', 'xkcd:fire engine red'],
+                            'Tetra': [0.01, 'T', 'deeppink'],
+                            'Green Algae': [0.01 , 'GA', 'green']} 
+                pond_pest_data = []
+                for idx, (key, val) in enumerate(pest_key.items()):
+                    threshold = val[0]
+                    if pests_df[key] >= threshold:
+                        pond_pest_data.append([val[1], val[2]])
+                
                 # set fill color based on afdw for now
                 fill_color = get_fill_color(data_dict['afdw'][1], 'afdw_colors') 
 
             # Get the last harvest date for each pond, done separately from other data queries due to needing all dates
             try:
-                pond_last_harvest = str(pond_data['Split Innoculum'].last_valid_index().date())
+                pond_last_harvest = str(pond_data['Split Innoculum'].last_valid_index().date().strftime('%-m-%-d-%Y'))
             except:
                 pond_last_harvest = 'n/a'
 
@@ -276,22 +295,39 @@ class ponds_overview:
             for idx, item in enumerate(data_displays):
                 if item == 'title':
                     # title subplot
-                    ax = plt.Subplot(fig, inner_plot[0,:])
-                    t = ax.text(0.5, 0.001, r'$\bf{' + pond_name + '}$' + f'\nlast harvest/split: {pond_last_harvest}', 
-                                ha = 'center', va='bottom')
-                    # Display pond pest info next to subplot title
+                    ax = plt.Subplot(fig, inner_plot[:2,:])
+                    
+                    # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
+                    # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
+                    x0, y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
+                    x1, y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
+                    dx = x1 - x0
+                    dy = y1 - y0
+                    maxd = max(dx, dy)
+                    circle_width = .07 * maxd / dx
+                    circle_height = .07 * maxd / dy
+                    
+                    ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
+                    ax.text(0.5, 0.48, f'last harvest/split: {pond_last_harvest}', ha='center', va='center')
+                    # Display pond pest info under subplot title
                     try:
-                        start_x = 0.64
-                        x_space = 0.05
-                        for c in pond_pest_colors:
-                            t = ax.text(start_x, 0.33, '*', ha='center', va='bottom', color=c, fontweight='bold', fontsize=17)
-                            start_x += x_space
+                        num_pest_data = len(pond_pest_data)*(circle_width+.01)
+                        calc_start_x = .5 - (num_pest_data/2) + ((circle_width+0.01)/2)
+                        pest_plot_y = .17
+                        x_space = circle_width + 0.01
+                        if num_pest_data > 0: 
+                            ax.text(calc_start_x - 0.05,pest_plot_y, 'Pests:', ha='right', va='center')
+                        for [pest,color] in pond_pest_data:
+                            ax.add_patch(Ellipse((calc_start_x, pest_plot_y + 0.02), circle_width, circle_height, color=color, fill=None))
+                            ax.text(calc_start_x, pest_plot_y, pest, color=color, ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
+                            calc_start_x += x_space
+                        
                     except: 
                         pass # if pond isn't active i.e., nothing to display
                     #ax.set_facecolor('whitesmoke')
                 else:
                     # data subplots
-                    ax = plt.Subplot(fig, inner_plot[1:,idx-1])
+                    ax = plt.Subplot(fig, inner_plot[2:,idx-1])
                     
                     # format data list item with a newline separator if there's more than one item (i.e., for 'depth' and 'afdw')
                     if pond_active == True: 
@@ -308,7 +344,7 @@ class ponds_overview:
                         t = ax.text(0.5, 0.5, text_formatted, ha='center', va='center')
 
                         ax.set_facecolor(fill_color)
-
+                    
                     else: # if pond is inactive or data_error
                         if idx == 2: # plot in the middle of the lower 3 subplots
                             if pond_data_error == True:
@@ -361,10 +397,14 @@ class ponds_overview:
         flat_title_labels = [label for item in title_labels for label in item]
         
         # Initialize main plot
-        fig = plt.figure(figsize=(25,25))
-        outer_plots = gridspec.GridSpec(len(title_labels), len(title_labels[0]), wspace=0.05, hspace=0.4)
-
-        fig.suptitle(f'{plot_title}\n{select_date}', fontweight='bold', fontsize=16, y=0.91)
+        plt_width = 8.5
+        plt_height = 11
+        scale_factor = 2.5
+        fig = plt.figure(figsize=(plt_width*scale_factor, plt_height*scale_factor))
+        outer_plots = gridspec.GridSpec(len(title_labels), len(title_labels[0]), wspace=0.05, hspace=0.1)
+        
+        title_date = '/'.join([select_date.split('-')[i].lstrip('0') for i in [1,2,0]])
+        fig.suptitle(f'{plot_title}\n{title_date}', fontweight='bold', fontsize=16, y=0.91)
         
         total_available_to_harvest = 0 # keep track of total available for harvest across all ponds
 
@@ -373,7 +413,7 @@ class ponds_overview:
             if 'BLANK' not in pond_name:
                 
                 # plot each pond with a function to ensure that data for each is isolated within a local scope
-                plot_each_pond(fig, pond_plot, pond_name, select_date)
+                plot_each_pond(ponds_data, fig, pond_plot, pond_name, select_date)
 
             else: # for plotting subplots labeled 'BLANK' in 'title_labels' list:  (the four lower right subplots) and the BLANK rows
                 ax = plt.Subplot(fig, pond_plot)
@@ -388,19 +428,21 @@ class ponds_overview:
                                                        "No data for current day:  Grey")
                     t = ax.text(0.1,0.5,legend_text,ha='left', va='center', 
                            bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
-                if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot
-                    pests_text = ("Color key (Pests > 0):\n"
-                                  "Rotifers:                      Blue\n"
-                                  "Attached FD111:         Red\n"
-                                  "Free Floating FD111:  Pink\n"
-                                  "Golden Flagellates:     Purple\n"
-                                  "Diatoms:                     Cyan\n"
-                                  "Tetra:                           Orange\n"
-                                  "Green Algae:               Green") 
+                if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot    
+                    pests_text = ("Key (Pests > 0):\n"
+                                  "Rotifers:                      R (blue)\n"
+                                  "Attached FD111:         FD-A (brown)\n"
+                                  "Free Floating FD111:  FD-FF (orange)\n"
+                                  "Golden Flagellates:     GF (purple)\n"
+                                  "Diatoms:                     D (red)\n"
+                                  "Tetra:                           T (pink)\n"
+                                  "Green Algae:               GA (green)") 
                     t = ax.text(0.1,0.5,pests_text,ha='left', va='center', 
                            bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
                 elif 'BLANK 13-1' in pond_name:
-                    print_string = (r'$\bf{Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
+                    print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
+                                    + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{num_active_ponds_sm}\n'
+                                    + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{num_active_ponds_lg}\n'
                                    + r'$\bf{Total\/\/mass\/\/(all\/\/ponds):}$' + f'{total_mass_all:,} kg')
                     t = ax.text(0,1, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
                     bottom_data_added_flag = True
@@ -421,26 +463,26 @@ class ponds_overview:
                         print_string += '\n'
                     print_string +=  r'$\bf{Suggested\/\/harvest\/\/mass:} $' + f'{target_harvest_mass:,} kg'
                     print_string += '\n' + r'$\bf{Suggested\/\/harvest\/\/volume:} $' + f'{target_harvest_gals:,.0f} gallons'
-                    t = ax.text(1.1,1, print_string, ha='left', va='top', fontsize=14, multialignment='left')               
+                    t = ax.text(0,1, print_string, ha='left', va='top', fontsize=14, multialignment='left')               
                 elif 'BLANK 14-1' in pond_name:
-                    print_string = (r'$\bf{Harvest\/\/Depth} = \frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
+                    print_string = (r'$\bf{Harvest\/\/Depth} =$' + '\n' + r'$\frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
                                     '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
                                     '\n' + r'$\bf{Target\/\/Harvest\/\/Down\/\/to\/\/AFDW}: $' + str(target_to_density) + 
                                     '\n' + r'$\bf{Target\/\/Top\/\/Off\/\/Depth}: $' + str(target_topoff_depth) + '"')
                     t = ax.text(0,.8, print_string, ha='left', va='top', fontsize=16) 
                     
                 elif 'BLANK 14-3' in pond_name:
-                    print_string = (r'$\bf{Harvestable\/\/Mass} = Harvest\/\/Depth * 132,489 (\frac{liters}{inch}) * Current\/\/AFDW$'
-                                    + '\n                                   (doubled for 06 and 08 columns)')
+                    print_string = (r'$\bf{Harvestable\/\/Mass} =$' + '\n' + r'$Harvest\/\/Depth * 132,489 (\frac{liters}{inch}) * Current\/\/AFDW$'
+                                    + '\n(doubled for 06 and 08 columns)')
                     t = ax.text(1.25,.8, print_string, ha='left', va='top', fontsize=16) 
                 
                 fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
         
+        out_filename = f'./output_files/{plot_title}-{select_date}.pdf'
         if save_output == True:
-            out_filename = f'./output_files/{plot_title}-{select_date}.pdf'
             plt.savefig(out_filename, bbox_inches='tight')
-            print(f'Plot saved to:\n{out_filename}')
         fig.show() 
+        return out_filename
         
 
 if __name__ == '__main__':   

@@ -35,7 +35,7 @@ echo "$python_output"
 if [[ $python_exec_code -eq 0 ]]; then
     output_filename=$(echo "$python_output" | tail -n 1)
     email_subjectline="$(cat automation/email_data/email_subjectline.txt) - ${currentdate}"
-    mutt -s "$email_subjectline" -a "$output_filename" -- $(cat automation/email_data/email_addresses.txt) < automation/email_data/email_text.txt
+    mutt -s "$email_subjectline" -a "$output_filename" -- $(cat automation/email_data/email_addresses-test.txt) < automation/email_data/email_text.txt
     if [[ $? -eq 0 ]]; then
         echo "Successfully generated and emailed file"
 	exit 0
