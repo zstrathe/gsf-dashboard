@@ -5,7 +5,6 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse
-import matplotlib.colors as mcolors
 import sys
 import re
 import argparse
@@ -117,7 +116,9 @@ class ponds_overview:
                 try:
                     dat = ponds_data[pond_name][['Fo','Split Innoculum']].shift(prev_day_n).loc[select_date]
                     if pd.isna(dat[1]) == False:
-                        if dat[1].upper() == 'I': # check if pond is noted as "I" for inactive, if so, break immediately and return False in the outer function
+                        # check if pond is noted as "I" for inactive in the "Split Innoculum" column, 
+                        # if so, break immediately and return False in the outer function
+                        if dat[1].upper() == 'I': 
                             return 'FalseBreakImmediate'
                     elif pd.isna(dat[0]) or dat[0] == 0:
                         return False
@@ -212,7 +213,7 @@ class ponds_overview:
             else: 
                 return return_data
         
-        # helper function for formatting text of pond data
+        # helper function for formatting text of pond data 
         def data_display_format(data_list): 
             # check whether data is a string, if not, then format with a ',' separator for thousands
             if type(data_list[1]) == str:
@@ -236,36 +237,57 @@ class ponds_overview:
             pond_active = check_active(ponds_data, pond_name, 5)
 
             try:
-                pond_data = ponds_data[pond_name]
+                single_pond_data = ponds_data[pond_name]
                 pond_data_error = False
             except:
                 pond_data_error = True
-
+            
+            # Gather data for pond if it's active
             if pond_active == True:
-                date_pond_data = pond_data.loc[select_date] # get dataframe for individual pond
+                date_single_pond_data = single_pond_data.loc[select_date] # get dataframe for individual pond
 
                 # Query the data and update in data_dict
                 for idx, (key, value) in enumerate(data_dict.items()):
                     query_name = key
-                    value[1] = data_query(date_pond_data, pond_name, query_name)
+                    value[1] = data_query(date_single_pond_data, pond_name, query_name)
 
                 # Query and format (color code) of pests for each pond
-                pests_df = date_pond_data[['Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
+                indicators_data = date_single_pond_data[['pH', 'Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
                                     'Tetra','Green Algae']].fillna(0)
-                # key for pests, each value a list with threshold for flagging (when >= threshold) and the color to format as
-                pest_dict = {'Rotifers ': [0.01, 'R', 'xkcd:deep sky blue'],   
-                            'Attached FD111': [0.01, 'FD\nA', 'xkcd:poo brown'],    
-                            'Free Floating FD111': [0.01, 'FD\nFF', 'orange'],  
-                            'Golden Flagellates': [0.01, 'GF', 'y'], 
-                            'Diatoms': [0.01, 'D', 'xkcd:fire engine red'],
-                            'Tetra': [0.01, 'T', 'purple'],
-                            'Green Algae': [0.01 , 'GA', 'green']} 
-                pond_pest_data = []
-                for idx, (key, val) in enumerate(pest_dict.items()):
-                    threshold = val[0]
-                    if pests_df[key] >= threshold:
-                        pond_pest_data.append([val[1], val[2]])
                 
+                # Get the % nanno indicator separately and join to indicators_data
+                # This is due to the value sometimes being missing, so look back to previous days (up to 2) to get it
+                for day in range(0,3):
+                    pct_nanno = single_pond_data['% Nanno'].shift(day).fillna(0).loc[select_date]
+                    if pct_nanno > 0:
+                        break
+                indicators_data['% Nanno'] = pct_nanno 
+                
+                # key for pests/indicators, each value a list with comparison operator to use, the threshold for flagging 
+                # and the color to display it as
+                indicator_dict = {'% Nanno': ['less', 80, '%N', 'xkcd:fire engine red'],
+                                 'pH': ['out-of-range', [7.8, 8.2], 'pH', 'xkcd:fire engine red'],
+                                 'Rotifers ': ['greater-equal', 1, 'R', 'xkcd:deep sky blue'],   
+                                'Attached FD111': ['greater-equal', 1, 'FD\nA', 'xkcd:poo brown'],    
+                                'Free Floating FD111': ['greater-equal', 1, 'FD\nFF', 'orange'],  
+                                'Golden Flagellates': ['greater-equal', 1, 'GF', 'y'], 
+                                'Diatoms': ['greater-equal', 0.5, 'D', 'xkcd:powder pink'],
+                                'Tetra': ['greater-equal', 0.5, 'T', 'purple'],
+                                'Green Algae': ['greater-equal', 0.5 , 'GA', 'green']} 
+                pond_indicator_data = []
+                for idx, (key, val) in enumerate(indicator_dict.items()):
+                    comparison_operator = val[0]
+                    threshold = val[1]
+                    if comparison_operator == 'greater-equal':
+                        if indicators_data[key] >= threshold:
+                            pond_indicator_data.append([val[2], val[3]])
+                    if comparison_operator == 'less':
+                        if indicators_data[key] < threshold:
+                            pond_indicator_data.append([val[2], val[3]])
+                    if comparison_operator == 'out-of-range':
+                        if indicators_data[key] < threshold[0] or indicators_data[key] > threshold[1]:
+                            pond_indicator_data.append([val[2], val[3]])
+                        
                 # set fill color based on density (afdw) for now
                 density_data = data_dict['afdw'][1] # set density_data as the current pond density (AFDW) value to set subplot color val
                 if density_data == 'No data':
@@ -277,9 +299,9 @@ class ponds_overview:
                         if density_data >= key[0] and density_data < key[1]:
                             fill_color = val 
                 
-            # Get the last harvest date for each pond, done separately from other data queries due to needing all dates
+            # Get the last harvest date for each pond, done separately from other data queries due to needing full range of dates, and regardless of whether it's active
             try:
-                pond_last_harvest = str(pond_data['Split Innoculum'].last_valid_index().date().strftime('%-m-%-d-%Y'))
+                pond_last_harvest = str(single_pond_data['Split Innoculum'].last_valid_index().date().strftime('%-m-%-d-%Y'))
             except:
                 pond_last_harvest = 'n/a'
 
@@ -289,34 +311,35 @@ class ponds_overview:
                     # title subplot
                     ax = plt.Subplot(fig, inner_plot[:2,:])
                     
-                    # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
-                    # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
-                    x0, y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
-                    x1, y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
-                    dx = x1 - x0
-                    dy = y1 - y0
-                    maxd = max(dx, dy)
-                    circle_width = .07 * maxd / dx
-                    circle_height = .07 * maxd / dy
-                    
                     ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
                     ax.text(0.5, 0.5, f'last harvest/split: {pond_last_harvest}', ha='center', va='center')
-                    # Display pond pest info under subplot title
-                    try:
-                        num_pest_data = len(pond_pest_data)*(circle_width+.01)
-                        calc_start_x = .5 - (num_pest_data/2) + ((circle_width+0.01)/2)
-                        pest_plot_y = .17
-                        x_space = circle_width + 0.01
-                        if num_pest_data > 0: 
-                            ax.text(calc_start_x - 0.05,pest_plot_y, 'Pests:', ha='right', va='center')
-                        for [pest,color] in pond_pest_data:
-                            ax.add_patch(Ellipse((calc_start_x, pest_plot_y + 0.02), circle_width, circle_height, color=color, fill=color))
-                            ax.text(calc_start_x, pest_plot_y, pest, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
-                            calc_start_x += x_space
-                        
-                    except: 
-                        pass # if pond isn't active i.e., nothing to display
-                    #ax.set_facecolor('whitesmoke')
+                    
+                    # Display pond pest/indicator info under subplot title for active ponds
+                    if pond_active == True:
+                        try:
+                            # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
+                            # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
+                            x0, y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
+                            x1, y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
+                            dx = x1 - x0
+                            dy = y1 - y0
+                            maxd = max(dx, dy)
+                            circle_width = .07 * maxd / dx
+                            circle_height = .07 * maxd / dy
+
+                            width_indicator_data = len(pond_indicator_data)*(circle_width+.01) # get the width of the indicator data (when plotted in circles)
+                            calc_start_x = .5 - (width_indicator_data/2) + ((circle_width+0.01)/2) # calculate which X coord to start plotting indicators (to center them on each subplot)
+                            indicator_plot_y = .17
+                            x_space = circle_width + 0.01
+                            #if width_indicator_data > 0: 
+                            #    ax.text(calc_start_x - 0.05,indicator_plot_y, 'Indicators:', ha='right', va='center')
+                            for [indicator_string,color] in pond_indicator_data:
+                                ax.add_patch(Ellipse((calc_start_x, indicator_plot_y + 0.02), circle_width, circle_height, color=color, fill=color))
+                                ax.text(calc_start_x, indicator_plot_y, indicator_string, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
+                                calc_start_x += x_space
+                        except: 
+                            ax.text(0.5, 0.17, 'ERROR PLOTTING INDICATORS')
+                    
                 else:
                     # data subplots
                     ax = plt.Subplot(fig, inner_plot[2:,idx-1])
@@ -410,27 +433,32 @@ class ponds_overview:
             else: # for plotting subplots labeled 'BLANK' in 'title_labels' list:  (the four lower right subplots) and the BLANK rows
                 ax = plt.Subplot(fig, pond_plot)
                 ax.axis('off')
-                if 'BLANK 11-6' in pond_name: # plot the legend in the first blank subplot
-                    legend_text = ("Color key (AFDW):\n"
-
-                                                       "0 - 0.24:                           Red\n"
-                                                       "0.25 - 0.49:                      Yellow\n"
-                                                       "0.50 - 0.79:                      Light Green\n"
-                                                       "0.80 and up:                    Dark Green\n"
-                                                       "No data for current day:  Grey")
-                    t = ax.text(0.1,0.5,legend_text,ha='left', va='center', 
-                           bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
+                if 'BLANK 11-6' in pond_name: # plot the color key in the first blank subplot
+                    legend_text = (
+                                    r'$\bf{Color\/\/key\/\/(AFDW)}$:' "\n"
+                                    "0 - 0.24:                           Red\n"
+                                    "0.25 - 0.49:                      Yellow\n"
+                                    "0.50 - 0.79:                      Light Green\n"
+                                    "0.80 and up:                    Dark Green\n"
+                                    "No data for current day:  Grey"
+                                   )
+                    t = ax.text(0.1,0.95,legend_text,ha='left', va='top', 
+                           bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
                 if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot    
-                    pests_text = ("Key (Pests > 0):\n"
-                                  "Rotifers:                      R (blue)\n"
-                                  "Attached FD111:         FD-A (brown)\n"
-                                  "Free Floating FD111:  FD-FF (orange)\n"
-                                  "Golden Flagellates:     GF (yellow)\n"
-                                  "Diatoms:                     D (red)\n"
-                                  "Tetra:                           T (purple)\n"
-                                  "Green Algae:               GA (green)") 
-                    t = ax.text(0.1,0.5,pests_text,ha='left', va='center', 
-                           bbox=dict(facecolor='tab:red', alpha=0.5), multialignment='left')
+                    indicators_legend_text = (
+                                  r'$\bf{Indicators }$' "\n"
+                                  r'% Nanno: $\leq$ 80%                 %N (red)' "\n"
+                                  r'pH: out of 7.8 - 8.2 range      pH (red)' "\n"
+                                  r'Rotifers: $\geq$ 1                         R (blue)' "\n"
+                                  r'Attached FD111: $\geq$ 1           FD-A (brown)' "\n"
+                                  r'Free Floating FD111: $\geq$ 1     FD-FF (orange)' "\n"
+                                  r'Golden Flagellates: $\geq$ 1        GF (yellow)' "\n"
+                                  r'Diatoms: $\geq$ 0.5                     D (pink)' "\n"
+                                  r'Tetra: $\geq$ 0.5                          T (purple)' "\n"
+                                  r'Green Algae: $\geq$ 0.5               GA (green)'
+                                 ) 
+                    t = ax.text(0.1,0.5,indicators_legend_text,ha='left', va='center', 
+                           bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
                 elif 'BLANK 13-1' in pond_name:
                     print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
                                     + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{num_active_ponds_sm}\n'
