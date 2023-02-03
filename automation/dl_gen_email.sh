@@ -29,7 +29,7 @@ echo "Running Python script"
 data_filename="data_sources/datafile.xlsx"
 source venv/bin/activate
 script_date_str=`date +%Y-%m-%d`
-python_output=$(python3 generate_overview.py -i $data_filename -d $script_date_str 2>&1)
+python_output=$(python3 generate_overview.py -i1 $data_filename -i2 "data_sources/epa_data.xlsx" -d $script_date_str 2>&1)
 python_exec_code=$?
 echo "$python_output"
 if [[ $python_exec_code -eq 0 ]]; then

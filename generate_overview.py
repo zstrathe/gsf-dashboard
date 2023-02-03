@@ -8,19 +8,28 @@ from matplotlib.patches import Ellipse
 import sys
 import re
 import argparse
+from datetime import datetime
 
 def main(argv):
     parser = argparse.ArgumentParser()
-    parser.add_argument("-i","--input_file", required=True, help="Excel (.xls or .xlsx) input file")
+    parser.add_argument("-i1","--input_file1", required=True, help="Excel (.xls or .xlsx) input file for scorecard data")
+    parser.add_argument("-i2","--input_file2", help="OPTIONAL: Excel (.xls or .xlsx) input file for EPA data (default = None)")
     parser.add_argument("-d","--date", required=True, help="Date to generate report for in 'yyyy-mm-dd' format; year must be from 2020 to 2023")
-    parser.add_argument("-t", "--target_density", type=float, default=0.4, help="Optional target density of AFDW (Default = 0.40)")
+    parser.add_argument("-t", "--target_density", type=float, default=0.4, help="OPTIONAL: target density of AFDW (Default = 0.40)")
     args = parser.parse_args()
     
-    # check that file is an excel file
-    file_extension = args.input_file.split(".")[-1]
+    # check that file 1 is an excel file
+    file_extension = args.input_file1.split(".")[-1]
     if not (file_extension == 'xlsx' or file_extension == 'xls'):
-        print("ERROR: input filetype should be .xlsx or .xls")
+        print("ERROR: scorecard data input filetype should be .xlsx or .xls")
         sys.exit(2)
+        
+    # check that file 2 (OPTIONAL) is an excel file
+    if args.input_file2:
+        file_extension = args.input_file2.split(".")[-1]
+        if not (file_extension == 'xlsx' or file_extension == 'xls'):
+            print("ERROR: EPA data input filetype should be .xlsx or .xls")
+            sys.exit(2)
     
     # check if date argument is valid
     date_error_flag = False
@@ -38,16 +47,16 @@ def main(argv):
             # check that month value (as an integer) is from 1-12        
             elif idx == 1:
                 if int(number) < 1 or int(number) > 12:
-                    error_flag = True
+                    date_error_flag = True
                     break
             # check that date value (as an integer) is from 1-31
             elif idx == 2:
                 if int(number) < 1 or int(number) > 31:
-                    error_flag = True
+                    date_error_flag = True
                     break
-        if date_error_flag == True:
-            print("ERROR: invalid date (should be 'yyyy-mm-ddd' between 2020 and 2023)")
-            sys.exit(2)
+    if date_error_flag == True:
+        print("ERROR: invalid date (should be 'yyyy-mm-ddd' between 2020 and 2023)")
+        sys.exit(2)
     
     # check if optional target_density argument is valid (between 0 and 1)
     if args.target_density:
@@ -57,11 +66,15 @@ def main(argv):
     
     overview = ponds_overview()
     print('Loading data...')
-    ponds_data = overview.load_data(excel_filename = args.input_file)
+    ponds_data = overview.load_scorecard_data(excel_filename = args.input_file1)
+    if args.input_file2:
+        epa_data = overview.load_epa_data(args.input_file2) 
+    else:
+        epa_data = None
     print('Plotting data...')
     ''' plot() method will return the output filename, so save it as a variable, then print it so that bash automation script 
         can access it from the last line of python stdout '''
-    out_filename = overview.plot(ponds_data=ponds_data, select_date=args.date, target_to_density=args.target_density) 
+    out_filename = overview.plot_scorecard(ponds_data=ponds_data, select_date=args.date, epa_data=epa_data, target_to_density=args.target_density) 
     print(f'Plot saved to:\n{out_filename}')
     sys.exit(0) # exit with status 0 to indicate successful execution
     
@@ -69,7 +82,7 @@ class ponds_overview:
     def __init__(self):
         pass
         
-    def load_data(self, excel_filename):
+    def load_scorecard_data(self, excel_filename):
         # Load the Daily Pond Scorecard excel file
         excel_sheets = pd.ExcelFile(excel_filename)
 
@@ -77,28 +90,105 @@ class ponds_overview:
         sheetnames = sorted(excel_sheets.sheet_names)
 
         # initialize list of ponds corresponding to excel sheet names #### NOTE: '1201 ' has a trailing space that should be fixed in excel file
-        ponds_list = ['0001', '0002', '0003', '0004', '0101', '0102', '0103', '0104', '0106', '0108', '0201', '0202', '0203', '0204', 
-                      '0206', '0208', '0301', '0302', '0303', '0304', '0306', '0308', '0401', '0402', '0403', '0404', '0406', '0408', 
-                      '0501', '0502', '0503', '0504', '0506', '0508', '0601', '0602', '0603', '0604', '0606', '0608', '0701', '0702', 
-                      '0703', '0704', '0706', '0708', '0801', '0802', '0803', '0804', '0806', '0808', '0901', '0902', '0903', '0904', 
-                      '0906', '0908', '1001', '1002', '1003', '1004', '1101', '1102', '1103', '1104', '1201 ', '1202', '1203', '1204']
+        ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201 ', 
+                      '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
+                      '0103', '0203', '0303', '0403', '0503', '0603', '0703', '0803', '0903', '1003', '1103', '1203',
+                      '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
+                      '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
+                      '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
         
         # create a dict containing a dataframe for each pond sheet
         all_ponds_data = {}
         for i in ponds_list:
-            all_ponds_data[i] = excel_sheets.parse(i)
-
+            try:
+                all_ponds_data[i] = excel_sheets.parse(i)
+            except:
+                pass
+            
         # clean the pond data (convert data from string to datetime, set date as index, drop empty columns   
         updated_ponds = {} # dict for storing cleaned data
         for key in enumerate(all_ponds_data.keys()):
-            df = all_ponds_data[key[1]] 
-            df.iloc[:,0] = pd.to_datetime(df.iloc[:,0], errors='coerce') # convert date column from string
-            df = df.set_index(df.iloc[:,0].name) # set date column as index
+            df = all_ponds_data[key[1]]
+            df = df.rename(columns={df.columns[0]:'date'})
+            df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
+            df = df.dropna(subset=['date']) # drop rows that don't contain a date/valid date
+            df = df.set_index(df['date'].name) # set date column as index
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
             updated_ponds[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
         return updated_ponds # return the cleaned data dict
+    
+    def load_epa_data(self, excel_epa_data, excel_pond_history="") -> dict:
 
-    def plot(self, ponds_data, select_date, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, save_output=True, plot_title='Pond Health Overview'): 
+        def process_epa_row(sample_label, epa_val):
+            label_split = sample_label.split()
+
+            # Get date from label and convert to datetime format
+            date = label_split[0]
+            date = datetime.strptime(date, "%y%m%d")
+
+            # Get pond number from label and format to match ponds_data dict keys
+            pond_num = label_split[1]
+            if pond_num.isnumeric() == False: # ignore the entries without a numeric pond name
+                return 
+            if len(pond_num) == 3:
+                pond_num = '0' + pond_num
+
+            # check if pond number exists as a key in pond data, ignore this data line if not    
+            if pond_num not in ponds_data:
+                print('KEY ERROR')
+                return 
+            
+            # skip sample if the epa value is not a float or int
+            if type(epa_val) not in (float, int):
+                return
+            
+            if date not in ponds_data[pond_num]:
+                ponds_data[pond_num]['epa_data'][date] = [epa_val]
+            else:
+                ponds_data[pond_num]['epa_data'][date].append(epa_val)
+                
+        def process_pond_history_row(pond_num, source_str):
+            pond_num = str(pond_num)
+            if len(pond_num) == 3:
+                pond_num = '0' + pond_num
+            ponds_data[pond_num]['source'] = source_str
+
+        # initialize list of ponds 
+        ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
+                      '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
+                      '0103', '0203', '0303', '0403', '0503', '0603', '0703', '0803', '0903', '1003', '1103', '1203',
+                      '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
+                      '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
+                      '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
+
+        # create a dict with an empty list for each pond number (to store date and epa value)
+        ponds_data = {k: {'source': '', 'epa_data':{}} for k in ponds_list} 
+        
+        epa_df = pd.read_excel(excel_epa_data, sheet_name="%EPA Only")
+        # process each row using Pandas vectorization and list comprehension rather than looping for better processing efficiency
+        [process_epa_row(a, b) for a, b in (zip(epa_df['Sample'], epa_df['C20:5 Methyl eicosapentaenoate (2734-47-6), 10%']))]
+        
+        # load and process the pond_history (source of each pond's algae strain) if file provided as an argument
+        if excel_pond_history:
+            pond_history_df = pd.read_excel(excel_pond_history, sheet_name='Sheet1')
+            [process_pond_history_row(a, b) for a, b in (zip(pond_history_df.iloc[:,0], pond_history_df.iloc[:,1]))]
+        
+        # Iterate through ponds_data, select only the last 3 daily readings 
+        # and average the EPA values for each date (when there is more than one value per date)
+        for idx, (pond_num, single_pond_data) in enumerate(ponds_data.copy().items()):
+            if len(single_pond_data['epa_data']) > 0: 
+                # filter data to select only the last 3 daily readings 
+                ponds_data[pond_num]['epa_data'] = {k:v for i, (k,v) in enumerate(sorted(single_pond_data['epa_data'].items(), reverse=True), start=1) if i <= 3}
+                # get the average of EPA all values for each day 
+                for idx2, (date_key, date_val) in enumerate(ponds_data[pond_num]['epa_data'].copy().items()):
+                    if len(date_val) > 0:
+                        ponds_data[pond_num]['epa_data'][date_key] = sum(date_val) / len(date_val)
+        return ponds_data 
+
+    def plot_scorecard(self, ponds_data, select_date, epa_data=None, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, save_output=True, plot_title='Pond Health Overview'): 
+        # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
+        select_date = pd.to_datetime(select_date).normalize()
+        
         # Initialize variables for aggregations
         total_mass_all = 0 # total mass for entire farm (regardless of density)
         total_harvestable_mass = 0 # all available mass with afdw > target_to_density
@@ -108,7 +198,6 @@ class ponds_overview:
         num_active_ponds = 0 # number of active ponds (defined by the plot_ponds().check_active() function)
         num_active_ponds_sm = 0 # number of active 1.1 acre ponds
         num_active_ponds_lg = 0 # number of active 2.2 acre ponds
-        
         
         # helper function to check if a pond has data from prior n-days from the selected date 
         def check_active(ponds_data, pond_name, num_days_prior):
@@ -144,6 +233,17 @@ class ponds_overview:
                 else:
                     pass
         
+        # helper function to query data from previous days, if it is not available for current day
+        def current_or_prev_query(df, col_name, num_prev_days, return_prev_day_num=False):
+                    for day_num in range(0,num_prev_days+1):
+                        data = df[col_name].shift(day_num).fillna(0).loc[select_date] # use fillna(0) to force missing data as 0
+                        if data > 0:
+                            if return_prev_day_num == True:
+                                return data, day_num
+                            else:
+                                return data
+                    return 0 # return 0 if no data found (though 'data' variable will be 0 anyway due to fillna(0) method used) 
+                
         # helper function to query single data points from each pond dataframe
         def data_query(pond_data, pond_name, query_name):
             # Select the data to return for each query
@@ -245,22 +345,19 @@ class ponds_overview:
             # Gather data for pond if it's active
             if pond_active == True:
                 date_single_pond_data = single_pond_data.loc[select_date] # get dataframe for individual pond
-
+                
                 # Query the data and update in data_dict
                 for idx, (key, value) in enumerate(data_dict.items()):
                     query_name = key
                     value[1] = data_query(date_single_pond_data, pond_name, query_name)
-
+                
                 # Query and format (color code) of pests for each pond
                 indicators_data = date_single_pond_data[['pH', 'Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
                                     'Tetra','Green Algae']].fillna(0)
                 
                 # Get the % nanno indicator separately and join to indicators_data
                 # This is due to the value sometimes being missing, so look back to previous days (up to 2) to get it
-                for day in range(0,3):
-                    pct_nanno = single_pond_data['% Nanno'].shift(day).fillna(0).loc[select_date]
-                    if pct_nanno > 0:
-                        break
+                pct_nanno = current_or_prev_query(single_pond_data, '% Nanno', 2)
                 indicators_data['% Nanno'] = pct_nanno 
                 
                 # key for pests/indicators, each value a list with comparison operator to use, the threshold for flagging 
@@ -287,21 +384,83 @@ class ponds_overview:
                     if comparison_operator == 'out-of-range':
                         if indicators_data[key] < threshold[0] or indicators_data[key] > threshold[1]:
                             pond_indicator_data.append([val[2], val[3]])
-                        
+                
+                # get most recent EPA value if it's provided as an argument
+                if epa_data:
+                    try:
+                        epa_val = list(epa_data[pond_name]["epa_data"].values())[0] # get 0 index since data should be sorted by most-recent first
+                    except:
+                        epa_val = 'n/a'
+                else:
+                    epa_val = None
+                
                 # set fill color based on density (afdw) for now
                 density_data = data_dict['afdw'][1] # set density_data as the current pond density (AFDW) value to set subplot color val
                 if density_data == 'No data':
                     fill_color = 'lightgrey'
                 else:    
-                    density_color_dict = {(0,0.249999999):'red', (0.25,0.499999999): 'yellow',
-                                        (0.50,0.799999999): 'mediumspringgreen', (0.80,999999999): 'tab:green'}
+                    density_color_dict = {(0,0.249999999): 0, 
+                                          (0.25,0.499999999): 1,
+                                          (0.5,0.799999999): 2, 
+                                          (0.80,999999999): 3}
+                    color_list = ['red', 'yellow', 'mediumspringgreen', 'tab:green']
                     for idx, (key, val) in enumerate(density_color_dict.items()):
                         if density_data >= key[0] and density_data < key[1]:
-                            fill_color = val 
+                            color_idx = val
+                            fill_color = color_list[color_idx] 
+                    # secondary fill color by EPA percentage
+                    if epa_val != None:
+                        if epa_val == 'n/a':
+                            fill_color='lightgrey'
+                        elif color_idx > 0 and epa_val < 0.02:
+                            fill_color = 'red'
+                        elif color_idx > 1 and epa_val < 0.035:
+                            fill_color = 'yellow'
                 
             # Get the last harvest date for each pond, done separately from other data queries due to needing full range of dates, and regardless of whether it's active
             try:
-                pond_last_harvest = str(single_pond_data['Split Innoculum'].last_valid_index().date().strftime('%-m-%-d-%Y'))
+                pond_last_harvest = str(single_pond_data['Split Innoculum'].last_valid_index().date().strftime('%-m-%-d-%y'))
+               
+              ## TODO: Calculate growth rates since last harvest / and 3-day   
+                # import traceback
+                # last_harvest_idx = single_pond_data['Split Innoculum'].last_valid_index()
+                   # new_growth_idx = last_harvest_idx + pd.Timedelta(days=1)
+    #                 if pond_active == True:
+    #                     try:
+    #                         print(pond_name,'\n new growth start date: ', new_growth_idx)
+    #                         date_key = pd.to_datetime(select_date, errors='coerce').normalize()
+    #                         test_growth_pond = single_pond_data.loc[new_growth_idx:select_date][['AFDW (filter)', 'Depth']]
+
+    #                         depth_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
+    #                         # for the 6 and 8 columns, double the depth to liters conversion because they are twice the size
+    #                         if pond_name[-2:] == '06' or pond_name[-2:] == '08': 
+    #                             depth_to_liters *= 2
+
+    #                         # calculate total mass in each pond and add to aggregation of all ponds
+    #                         test_growth_pond['mass'] = test_growth_pond['Depth'] * depth_to_liters * test_growth_pond['AFDW (filter)']
+    #                         test_growth_pond['mass'] = test_growth_pond['mass']/1000
+    #                         quantiles_df = test_growth_pond[test_growth_pond['mass'] != 0]['mass']
+    #                         print('std dev: ', quantiles_df.std())
+    #                         print('mean: ', quantiles_df.mean())
+    #                         print(quantiles_df[np.abs(quantiles_df-quantiles_df.mean()) <= (3*quantiles_df.std())])
+
+
+    #                         quantile_low = quantiles_df.quantile(0.01)
+    #                         quantile_high = quantiles_df.quantile(0.99)
+    #                         iqr = quantile_high - quantile_low
+    #                         low_bound = quantile_low - (1.5*iqr)
+    #                         high_bound = quantile_high + (1.5*iqr)
+    #                         print('low quantile: ', quantile_low, '| high quantile: ', quantile_high)
+    #                         print('low bound: ', low_bound, '| high bound: ', high_bound)
+
+    #                         test_growth_pond['mass'] = test_growth_pond['mass'].replace(0, float('nan'))
+
+    #                         test_growth_pond['mass2'] = test_growth_pond['mass'].interpolate(method="spline", order=1, limit_direction="both")
+
+    #                         print(test_growth_pond)
+    #                     except Exception as ex:
+    #                         print(f'{pond_name}: error')
+    #                         print(''.join(traceback.TracebackException.from_exception(ex).format()))
             except:
                 pond_last_harvest = 'n/a'
 
@@ -311,6 +470,17 @@ class ponds_overview:
                     # title subplot
                     ax = plt.Subplot(fig, inner_plot[:2,:])
                     
+                    # plot pond EPA data
+                    if epa_data:
+                        try:
+                            if epa_val == 'n/a':
+                                epa_val_str = 'No EPA data'
+                            else:
+                                epa_val_str = f'{epa_val * 100:.2f}% EPA'
+                            ax.text(0.8, 0.8, epa_val_str, ha='center', va='center')
+                        except:
+                            pass
+                        
                     ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
                     ax.text(0.5, 0.5, f'last harvest/split: {pond_last_harvest}', ha='center', va='center')
                     
@@ -418,7 +588,8 @@ class ponds_overview:
         fig = plt.figure(figsize=(plt_width*scale_factor, plt_height*scale_factor))
         outer_plots = gridspec.GridSpec(len(title_labels), len(title_labels[0]), wspace=0.05, hspace=0.1)
         
-        title_date = '/'.join([select_date.split('-')[i].lstrip('0') for i in [1,2,0]])
+        #title_date = '/'.join([select_date.split('-')[i].lstrip('0') for i in [1,2,0]])
+        title_date = select_date.strftime('%-m/%-d/%Y')
         fig.suptitle(f'{plot_title}\n{title_date}', fontweight='bold', fontsize=16, y=0.905)
         
         total_available_to_harvest = 0 # keep track of total available for harvest across all ponds
@@ -434,7 +605,19 @@ class ponds_overview:
                 ax = plt.Subplot(fig, pond_plot)
                 ax.axis('off')
                 if 'BLANK 11-6' in pond_name: # plot the color key in the first blank subplot
-                    legend_text = (
+                    # different color keys depending on whether EPA data is provided or not
+                    if epa_data:
+                        legend_text = (
+                                        r'$\bf{Color\/\/key}$:' "\n"
+                                       r'    $\bf{AFDW} \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \ \bf{EPA}$'"\n"         
+                                        "       < 0.25     or               < 2%:     Red\n"
+                                        "0.25 - 0.49     or      2% - 3.49%:     Yellow\n"
+                                        "0.50 - 0.79    and          "r'$\geq$'" 3.5%:     Light Green\n"
+                                        "     "r'$\geq$'" 0.80    and          "r'$\geq$'" 3.5%:     Dark Green\n"
+                                        "Incomplete data for current day:     Grey"
+                                       )
+                    else:
+                           legend_text = (
                                     r'$\bf{Color\/\/key\/\/(AFDW)}$:' "\n"
                                     "0 - 0.24:                           Red\n"
                                     "0.25 - 0.49:                      Yellow\n"
@@ -442,12 +625,13 @@ class ponds_overview:
                                     "0.80 and up:                    Dark Green\n"
                                     "No data for current day:  Grey"
                                    )
-                    t = ax.text(0.1,0.95,legend_text,ha='left', va='top', 
+                        
+                    t = ax.text(0.1,0.98,legend_text,ha='left', va='top', 
                            bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
                 if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot    
                     indicators_legend_text = (
                                   r'$\bf{Indicators }$' "\n"
-                                  r'% Nanno: $\leq$ 80%                 %N (red)' "\n"
+                                  r'% Nanno: < 80%                 %N (red)' "\n"
                                   r'pH: out of 7.8 - 8.2 range      pH (red)' "\n"
                                   r'Rotifers: $\geq$ 1                         R (blue)' "\n"
                                   r'Attached FD111: $\geq$ 1           FD-A (brown)' "\n"
@@ -457,15 +641,14 @@ class ponds_overview:
                                   r'Tetra: $\geq$ 0.5                          T (purple)' "\n"
                                   r'Green Algae: $\geq$ 0.5               GA (green)'
                                  ) 
-                    t = ax.text(0.1,0.5,indicators_legend_text,ha='left', va='center', 
+                    t = ax.text(0.1,0.4,indicators_legend_text,ha='left', va='center', 
                            bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
                 elif 'BLANK 13-1' in pond_name:
                     print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
                                     + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{num_active_ponds_sm}\n'
                                     + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{num_active_ponds_lg}\n'
                                    + r'$\bf{Total\/\/mass\/\/(all\/\/ponds):}$' + f'{total_mass_all:,} kg')
-                    t = ax.text(0,1, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
-                    bottom_data_added_flag = True
+                    t = ax.text(0,.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
                 elif 'BLANK 13-3' in pond_name:
                     # sort the suggested_harvests dict by the pond column first (last 2 digits of name)
                     suggested_harvests = dict(sorted(suggested_harvests.items(), key=lambda item: item[0][-2:]))
@@ -483,22 +666,233 @@ class ponds_overview:
                         print_string += '\n'
                     print_string +=  r'$\bf{Suggested\/\/harvest\/\/mass:} $' + f'{target_harvest_mass:,} kg'
                     print_string += '\n' + r'$\bf{Suggested\/\/harvest\/\/volume:} $' + f'{target_harvest_gals:,.0f} gallons'
-                    t = ax.text(0,1, print_string, ha='left', va='top', fontsize=14, multialignment='left')               
-                elif 'BLANK 14-1' in pond_name:
-                    print_string = (r'$\bf{Harvest\/\/Depth} =$' + '\n' + r'$\frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
-                                    '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
-                                    '\n' + r'$\bf{Target\/\/Harvest\/\/Down\/\/to\/\/AFDW}: $' + str(target_to_density) + 
-                                    '\n' + r'$\bf{Target\/\/Top\/\/Off\/\/Depth}: $' + str(target_topoff_depth) + '"')
-                    t = ax.text(0,.8, print_string, ha='left', va='top', fontsize=16) 
+                    t = ax.text(0,.75, print_string, ha='left', va='top', fontsize=14, multialignment='left')               
+                # elif 'BLANK 14-1' in pond_name:
+                    # print_string = (r'$\bf{Harvest\/\/Depth} =$' + '\n' + r'$\frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
+                    #                 '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
+                    #                 '\n' + r'$\bf{Target\/\/Harvest\/\/Down\/\/to\/\/AFDW}: $' + str(target_to_density) + 
+                    #                 '\n' + r'$\bf{Target\/\/Top\/\/Off\/\/Depth}: $' + str(target_topoff_depth) + '"')
+                    # t = ax.text(0,.8, print_string, ha='left', va='top', fontsize=16) 
                     
-                elif 'BLANK 14-3' in pond_name:
-                    print_string = (r'$\bf{Harvestable\/\/Mass} =$' + '\n' + r'$Harvest\/\/Depth * 132,489 (\frac{liters}{inch}) * Current\/\/AFDW$'
-                                    + '\n(doubled for 06 and 08 columns)')
-                    t = ax.text(1.25,.8, print_string, ha='left', va='top', fontsize=16) 
+                # elif 'BLANK 14-3' in pond_name:
+                    # print_string = (r'$\bf{Harvestable\/\/Mass} =$' + '\n' + r'$Harvest\/\/Depth * 132,489 (\frac{liters}{inch}) * Current\/\/AFDW$'
+                    #                 + '\n(doubled for 06 and 08 columns)')
+                    # t = ax.text(1.25,.8, print_string, ha='left', va='top', fontsize=16) 
                 
                 fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
         
-        out_filename = f'./output_files/{plot_title} {select_date}.pdf'
+        out_filename = f'./output_files/{plot_title} {select_date.strftime("%Y-%m-%d")}.pdf'
+        if save_output == True:
+            plt.savefig(out_filename, bbox_inches='tight')
+        fig.show() 
+        return out_filename
+    
+    ## TODO implement a way of plotting this EPA overview as an additional page to the PDF output implemented in main()
+    def plot_epa(self, ponds_data: dict, save_output=True, plot_title='Pond EPA Overview') -> str: # returns output file name as a string 
+        def subplot_ax_format(subplot_ax, fill_color):
+                subplot_ax.set_facecolor(fill_color)
+                subplot_ax.spines['top'].set_visible(False)
+                subplot_ax.spines['right'].set_visible(False)
+                subplot_ax.spines['bottom'].set_visible(False)
+                subplot_ax.spines['left'].set_visible(False)
+                subplot_ax.get_xaxis().set_ticks([])
+                subplot_ax.get_yaxis().set_ticks([])
+                fig.add_subplot(subplot_ax)
+
+        # function to plot each pond to ensure that data for each plot is kept within a local scope
+        def plot_each_pond(ponds_data, fig, pond_plot, pond_name):
+            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=0, hspace=0)
+
+            # get data for individual pond only, as a list
+            # each list entry should consist of a tuple containing the date and the epa value, sorted in descending order by date
+            single_pond_data = list(ponds_data[pond_name]['epa_data'].items())
+            
+             # check and update the title_date global variable if this pond has a more recent date
+            if len(single_pond_data) != 0:
+                nonlocal title_date
+                if single_pond_data[0][0] > title_date:
+                    title_date = single_pond_data[0][0]
+            
+            # title subplot
+            title_ax = plt.Subplot(fig, inner_plot[0,:])
+            title_str = r'$\bf{' + pond_name + '}$' 
+            if len(ponds_data[pond_name]['source']) > 0:
+                title_str += '\nsource: ' + ponds_data[pond_name]['source']
+            title_ax.text(0.5, 0.1, title_str , ha = 'center', va='bottom', fontsize='large')
+            subplot_ax_format(title_ax, 'white')
+
+            # epa data subplots
+            epa_ax = plt.Subplot(fig, inner_plot[1:3,:])
+
+            # set fill color based on latest EPA reading
+            if len(single_pond_data) > 0:
+                # set lastest_epa_data as the first value in single_pond_data (which should be reverse sorted)
+                latest_epa_data = single_pond_data[0][1] 
+                fill_color_dict = {(0,0.0199999999):'red', 
+                                   (0.02,0.0349999999): 'yellow',
+                                   (0.035,99999999999): 'mediumspringgreen'}
+                for idx, (key, val) in enumerate(fill_color_dict.items()):
+                    if latest_epa_data >= key[0] and latest_epa_data < key[1]:
+                        fill_color = val 
+            else:
+                # set fill color as light grey if there is no EPA data for the pond
+                fill_color = 'whitesmoke'
+
+            subplot_ax_format(epa_ax, fill_color)
+
+            if len(single_pond_data) > 0:
+                # set the center-point of each data point on the subplot, depending on number of data points available
+                if len(single_pond_data) == 1:
+                    text_x = [0.5]
+                elif len(single_pond_data) == 2:
+                    text_x = [0.3, 0.7]
+                else:
+                    text_x = [0.195, 0.5, 0.805]
+
+                for idx, item in enumerate(single_pond_data):
+                    text_date_formatted =  item[0].strftime("%_m/%_d/%y")
+                    epa_ax.text(text_x[idx], 0.7, text_date_formatted, ha='center', va='center')
+                    text_epa_data_formatted =  f'{item[1]*100: .2f}%'
+                    epa_ax.text(text_x[idx], 0.3, text_epa_data_formatted, ha='center', va='center', fontsize='large', weight='bold')
+            else:
+                epa_ax.text(0.5, 0.5, 'No Data', ha='center', va='center')
+
+            # epa change
+            epa_pct_ax = plt.Subplot(fig, inner_plot[3:,:])
+
+            # Get the % change in EPA values if there is >1 entry (use the first and last indexes of the single_pond_data list)
+            if len(single_pond_data) != 0:
+                epa_pct_fill = 'xkcd:light grey'    
+                
+                def calc_epa_pct_chg(data_curr: list, data_prev: list):
+                    '''
+                    inputs:
+                        data_curr: [datetime value, epa float value]
+                        data_prev: [datetime value, epa float value]
+                    
+                    output:
+                        pct_chg: calculated absolute change in percentage rounded to 2 decimal places and formatted with % character (str)
+                        delta_days: number of days between readings (int)
+                        pct_format_color: color for displaying percentage (str)
+                    '''
+                    delta_days = (data_curr[0] - data_prev[0]).days    
+                    if data_prev[1] > 0: # deal with edge case of the previous data point being 0
+                        pct_chg = (data_curr[1] - data_prev[1]) * 100
+                        if pct_chg > 0:
+                            pct_format_color = 'xkcd:emerald green'
+                            pct_chg = f'+{pct_chg:.2f}%'
+                        elif pct_chg < 0: 
+                            pct_format_color = 'xkcd:fire engine red'
+                            pct_chg = f'{pct_chg:.2f}%'
+                        else:
+                            pct_format_color = 'black'
+                            pct_chg = f'{pct_chg:.2f}%'
+                        return [pct_chg, delta_days, pct_format_color]
+                    else:
+                        return ['n/a', delta_days, 'black']
+                
+                if len(single_pond_data) == 2:
+                    epa_pct_chg, delta_days, epa_pct_color = calc_epa_pct_chg(single_pond_data[0], single_pond_data[1])
+                    text_formatted1 =  f'Change ({delta_days} day{"s" if delta_days > 1 else ""}):' 
+                    epa_pct_ax.text(0.5, 0.7, text_formatted1, ha='center', va='center', fontsize='large')
+                    epa_pct_ax.text(0.5, 0.3, epa_pct_chg, ha='center', va='center', fontsize='large', color=epa_pct_color, weight='bold')
+                elif len(single_pond_data) == 3:
+                    epa_pct_chg1, delta_days1, epa_pct_color1 = calc_epa_pct_chg(single_pond_data[0], single_pond_data[1])
+                    epa_pct_chg2, delta_days2, epa_pct_color2 = calc_epa_pct_chg(single_pond_data[0], single_pond_data[2])
+                    text_formatted1 =  f'Change ({delta_days1} day{"s" if delta_days1 > 1 else ""}, {delta_days2} days):'
+                    epa_pct_ax.text(0.5, 0.7, text_formatted1, ha='center', va='center', fontsize='large')
+                    epa_pct_ax.text(0.3, 0.3, epa_pct_chg1, ha='center', va='center', fontsize='large', color=epa_pct_color1, weight='bold')
+                    epa_pct_ax.text(0.7, 0.3, epa_pct_chg2, ha='center', va='center', fontsize='large', color=epa_pct_color2, weight='bold')
+                else: # if there is only one data point so no percentage change
+                    epa_pct_ax.text(0.5, 0.7, 'Change:', ha='center', va='center', fontsize='large')
+                    epa_pct_ax.text(0.5, 0.3, 'n/a', ha='center', va='center', fontsize='large')
+            
+            else: # when there is no data for this pond
+                epa_pct_fill = 'whitesmoke'
+
+            subplot_ax_format(epa_pct_ax, epa_pct_fill) 
+
+        ##############################
+        ### START OF PLOTTING CODE ###
+        ##############################
+
+        n_rows_small = 12
+        n_rows_large = 10
+        n_cols_small = 4
+        n_cols_large = 2
+
+        # generate labels for ponds in a list (with each row being a sublist)
+        title_labels = []
+        for row in range(1,n_rows_small+1):
+            title_labels.append([])
+            for col in range(1,n_cols_small+1):
+                if row < 10:
+                    title_labels[row-1].append(f'0{row}0{col}')  
+                else:
+                    title_labels[row-1].append(f'{row}0{col}')  
+        for idx_row, row in enumerate(title_labels):
+            if idx_row < n_rows_large:
+                for col in [6,8]:
+                    if idx_row+1 < 10:
+                        row.append(f'0{idx_row+1}0{col}')
+                    else:
+                        row.append(f'{idx_row+1}0{col}')
+            else: # append blanks for the two large columns with only 10 rows 
+                [row.append(f'BLANK {idx_row+1}-{c}') for c in [6,8]]
+
+        # Add 2 blank rows at end to make room for extra data aggregations to be listed        
+        #[title_labels.append([f'BLANK {r}-{c}' for c in range(1,7)]) for r in range(13,15)]
+
+        # flatten title_labels for indexing from plot gridspec plot generation
+        flat_title_labels = [label for item in title_labels for label in item]
+        
+        # initialize title_date as a global variable to track the most recent date to print in the title
+        title_date = datetime.min
+        
+        # Initialize main plot
+        plt_width = 8.5
+        plt_height = 11
+        scale_factor = 2.5
+        fig = plt.figure(figsize=(plt_width*scale_factor, plt_height*scale_factor))
+        outer_plots = gridspec.GridSpec(len(title_labels), len(title_labels[0]), wspace=0.05, hspace=0.2)
+
+        for idx_plot, pond_plot in enumerate(outer_plots):
+            pond_name = flat_title_labels[idx_plot]
+            if 'BLANK' not in pond_name:
+
+                # plot each pond with a function to ensure that data for each is isolated within a local scope
+                plot_each_pond(ponds_data, fig, pond_plot, pond_name)
+
+            else: # for plotting subplots labeled 'BLANK' in 'title_labels' list:  (the four lower right subplots) and the BLANK rows
+                ax = plt.Subplot(fig, pond_plot)
+                ax.axis('off')
+                if 'BLANK 11-6' in pond_name: # plot the color key in the first blank subplot
+                    legend_text = (
+                                    r'$\bf{Color\/\/key\/\/(latest\/\/EPA\/\/reading)}$:' "\n"
+                                    "0% - 1.99%:      Red\n"
+                                    "2% - 3.49%:      Yellow\n"
+                                    "3.5% and up:    Green\n"
+                                    "No EPA data:     Grey"
+                                   )
+                    t = ax.text(0.1,0.8,legend_text,ha='left', va='top', fontsize = 'x-large',
+                           bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
+                if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot    
+                    pass
+                elif 'BLANK 13-1' in pond_name:
+                    pass
+                elif 'BLANK 13-3' in pond_name:
+                    pass            
+                elif 'BLANK 14-1' in pond_name:
+                    pass
+                elif 'BLANK 14-3' in pond_name:
+                    pass
+
+                fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
+        
+        title_date_formatted = title_date.strftime('%-m/%-d/%Y')
+        fig.suptitle(f'{plot_title}\nas of {title_date_formatted}', fontweight='bold', fontsize=16, y=0.905)
+        
+        out_filename = f'./output_files/{plot_title} {title_date.strftime("%Y-%m-%d")}.pdf'
         if save_output == True:
             plt.savefig(out_filename, bbox_inches='tight')
         fig.show() 
