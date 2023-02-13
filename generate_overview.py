@@ -103,7 +103,7 @@ class ponds_overview:
             try:
                 all_ponds_data[i] = excel_sheets.parse(i)
             except:
-                pass
+                print('Failed to load data for pond:', i)
             
         # clean the pond data (convert data from string to datetime, set date as index, drop empty columns   
         updated_ponds = {} # dict for storing cleaned data
@@ -245,93 +245,111 @@ class ponds_overview:
                     return 0 # return 0 if no data found (though 'data' variable will be 0 anyway due to fillna(0) method used) 
                 
         # helper function to query single data points from each pond dataframe
-        def data_query(pond_data, pond_name, query_name):
-            # Select the data to return for each query
-            # convert to float to catch exception of an empty dataframe being returned (will be Inactive/Error from try/except statement that calls this function)
-            return_data = None
+#         def data_query(pond_data, pond_name, query_name):
+#             # Select the data to return for each query
+#             # convert to float to catch exception of an empty dataframe being returned (will be Inactive/Error from try/except statement that calls this function)
+#             return_data = None
 
-            if query_name == 'afdw':
-                return_data = pond_data['AFDW (filter)']
-                if return_data == 0: # if 0, set as None to be flagged as "No data"
-                    return_data = None
-                else:
-                    return_data = round(return_data, 3)
+#             if query_name == 'afdw':
+#                 return_data = pond_data['AFDW (filter)']
+#                 if return_data == 0: # if 0, set as None to be flagged as "No data"
+#                     return_data = None
+#                 else:
+#                     return_data = round(return_data, 3)
 
-            elif query_name == 'depth':
-                return_data = pond_data['Depth']
-                if return_data == 0: # if 0, set as None to be flagged as "No data"
-                    return_data = None
+#             elif query_name == 'depth':
+#                 return_data = pond_data['Depth']
+#                 if return_data == 0: # if 0, set as None to be flagged as "No data"
+#                     return_data = None
 
-            elif query_name == 'harvestable_mass':
-                data = pond_data[['AFDW (filter)', 'Depth']]
-                curr_density = data[0]
-                curr_depth = data[1]
-                if curr_density != 0 and curr_depth != 0:
-                    depth_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
-                    # for the 6 and 8 columns, double the depth to liters conversion because they are twice the size
-                    if pond_name[-2:] == '06' or pond_name[-2:] == '08': 
-                        depth_to_liters *= 2
+#             elif query_name == 'harvestable_mass':
+#                 data = pond_data[['AFDW (filter)', 'Depth']]
+#                 curr_density = data[0]
+#                 curr_depth = data[1]
+#                 if curr_density != 0 and curr_depth != 0:
+#                     depth_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
+#                     # for the 6 and 8 columns, double the depth to liters conversion because they are twice the size
+#                     if pond_name[-2:] == '06' or pond_name[-2:] == '08': 
+#                         depth_to_liters *= 2
                     
-                    # calculate total mass in each pond and add to aggregation of all ponds
-                    curr_pond_mass = curr_depth * depth_to_liters * curr_density
-                    curr_pond_mass = int(curr_pond_mass/1000) # convert grams to kg and round by converting to int
-                    nonlocal total_mass_all
-                    total_mass_all += curr_pond_mass
+#                     # calculate total mass in each pond and add to aggregation of all ponds
+#                     curr_pond_mass = curr_depth * depth_to_liters * curr_density
+#                     curr_pond_mass = int(curr_pond_mass/1000) # convert grams to kg and round by converting to int
+#                     nonlocal total_mass_all
+#                     total_mass_all += curr_pond_mass
                     
-                    # calculate harvest depth to reach target density
-                    harvest_depth = ((curr_depth * curr_density) - (target_topoff_depth * target_to_density)) / curr_density
-                    harvestable_gals = harvest_depth * 35000 # calc harvestable gallons
+#                     # calculate harvest depth to reach target density
+#                     harvest_depth = ((curr_depth * curr_density) - (target_topoff_depth * target_to_density)) / curr_density
+#                     harvestable_gals = harvest_depth * 35000 # calc harvestable gallons
 
-                    #calculate harvestable mass as (harvest depth * depth_to_liters) * current density
-                    harvestable_mass = (harvest_depth * depth_to_liters) * curr_density
+#                     #calculate harvestable mass as (harvest depth * depth_to_liters) * current density
+#                     harvestable_mass = (harvest_depth * depth_to_liters) * curr_density
 
-                    # convert grams to kg and round by converting to int
-                    harvestable_mass = int(harvestable_mass / 1000)
+#                     # convert grams to kg and round by converting to int
+#                     harvestable_mass = int(harvestable_mass / 1000)
 
-                    if harvestable_mass > 0:
-                        return_data = harvestable_mass
+#                     if harvestable_mass > 0:
+#                         return_data = harvestable_mass
 
-                        # save harvest_depth in suggested_harvests dictionary ONLY IF curr_density >= harvest_density
-                        if round(curr_density,3) >= harvest_density:
-                            nonlocal suggested_harvests
-                            nonlocal target_harvest_mass
-                            nonlocal target_harvest_gals
-                            suggested_harvests[pond_name] = round(harvest_depth,2)
-                            target_harvest_mass += harvestable_mass
-                            target_harvest_gals += harvestable_gals
-                    else:
-                        return_data = 0
-                else:
-                    return_data = None # None value which will be converted to "No data", because missing either density or depth data
+#                         # save harvest_depth in suggested_harvests dictionary ONLY IF curr_density >= harvest_density
+#                         if round(curr_density,3) >= harvest_density:
+#                             nonlocal suggested_harvests
+#                             nonlocal target_harvest_mass
+#                             nonlocal target_harvest_gals
+#                             suggested_harvests[pond_name] = round(harvest_depth,2)
+#                             target_harvest_mass += harvestable_mass
+#                             target_harvest_gals += harvestable_gals
+#                     else:
+#                         return_data = 0
+#                 else:
+#                     return_data = None # None value which will be converted to "No data", because missing either density or depth data
 
-            elif query_name == 'growth':
-                return_data = None
+#             elif query_name == 'growth':
+#                 return_data = None
           
             # Check if pond data is n/a
-            if pd.isna(return_data):
-                return "No data"
-            else: 
-                return return_data
+            # if pd.isna(return_data):
+            #     return "No data"
+            # else: 
+            #     return return_data
         
-        # helper function for formatting text of pond data 
-        def data_display_format(data_list): 
-            # check whether data is a string, if not, then format with a ',' separator for thousands
-            if type(data_list[1]) == str:
-                return f'{data_list[0]}:\n{data_list[1]}'
-            else:
-                return f'{data_list[0]}:\n{data_list[1]:,}'
+        # # helper function for formatting text of pond data 
+        # def data_display_format(data_list): 
+        #     # check whether data is a string, if not, then format with a ',' separator for thousands
+        #     if type(data_list[1]) == str:
+        #         return f'{data_list[0]}:\n{data_list[1]}'
+        #     else:
+        #         return f'{data_list[0]}:\n{data_list[1]:,}'
+            
+        # helper function to convert density & depth to mass (in kilograms)
+        def afdw_depth_to_mass(afdw, depth, pond_name):
+            depth_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
+            # for the 6 and 8 columns, double the depth to liters conversion because they are twice the size
+            if pond_name[-2:] == '06' or pond_name[-2:] == '08': 
+                depth_to_liters *= 2
+            # calculate and return total mass (kg)
+            return (afdw * depth_to_liters * depth) / 1000
         
+        def subplot_ax_format(subplot_ax):
+            subplot_ax.spines['top'].set_visible(False)
+            subplot_ax.spines['right'].set_visible(False)
+            subplot_ax.spines['bottom'].set_visible(False)
+            subplot_ax.spines['left'].set_visible(False)
+            subplot_ax.get_xaxis().set_ticks([])
+            subplot_ax.get_yaxis().set_ticks([])
+            fig.add_subplot(subplot_ax)
+                    
         # function to plot each pond to ensure that data for each plot is kept within a local scope
         def plot_each_pond(ponds_data, fig, pond_plot, pond_name, select_date):
-            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=0, hspace=0)
+            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=-0.01, hspace=-0.01)
 
             # setup data dict as: query_string: [data_label, data_point]
-            data_dict = {'afdw':['AFDW', None],
-                         'depth':['Depth', None], 
-                         'harvestable_mass':['Avail. to\nHarvest (kg)', None],
-                         'growth':['Growth',None],
-                         'pests':['Pests',None] 
-                         }
+            # data_dict = {'afdw':['AFDW', None],
+            #              'depth':['Depth', None], 
+            #              'harvestable_mass':['Avail. to\nHarvest (kg)', None],
+            #              'growth':['Growth',None],
+            #              'pests':['Pests',None] 
+            #              }
 
             # Check prior 5 days of data to see if pond is active/in-use
             pond_active = check_active(ponds_data, pond_name, 5)
@@ -346,10 +364,43 @@ class ponds_overview:
             if pond_active == True:
                 date_single_pond_data = single_pond_data.loc[select_date] # get dataframe for individual pond
                 
+                # calculate data for pond subplot display
+                pond_data_afdw = single_pond_data.loc[select_date]['AFDW (filter)']
+                pond_data_depth = single_pond_data.loc[select_date]['Depth']
+                
+                if pond_data_afdw != 0 or pond_data_depth != 0:
+                    pond_data_total_mass = int(afdw_depth_to_mass(pond_data_afdw, pond_data_depth, pond_name))
+                    # calculate harvestable depth (in inches) based on depth and afdw and the target_topoff_depth & target_to_density global function parameters
+                    pond_data_harvestable_depth = round(((pond_data_depth * pond_data_afdw) - (target_topoff_depth * target_to_density)) / pond_data_afdw,2)
+                    if pond_data_harvestable_depth < 0: 
+                        pond_data_harvestable_depth = 0
+                    # calculate harvestable volume (in gallons) based on harvestable depth and conversion factor (35,000) to gallons. Double for the '06' and '08' column ponds since they are double size
+                    pond_data_harvestable_gallons = pond_data_harvestable_depth * 35000
+                    if pond_name[-2:] == '06' or pond_name[-2:] == '08':
+                        pond_data_harvestable_gallons *= 2
+                    pond_data_harvestable_mass = int(afdw_depth_to_mass(pond_data_afdw, pond_data_harvestable_depth, pond_name))
+
+                    # Add pond info to global counters/data for the entire farm
+                    nonlocal total_mass_all
+                    total_mass_all += pond_data_total_mass # add pond mass to the total_mass_all counter for entire farm
+                    if pond_data_afdw > harvest_density: # add these only if current pond density is greater than the global function parameter 'harvest_density'
+                        nonlocal suggested_harvests
+                        nonlocal target_harvest_mass
+                        nonlocal target_harvest_gals
+                        suggested_harvests[pond_name] = round(pond_data_harvestable_depth,2)
+                        target_harvest_mass += pond_data_harvestable_mass
+                        target_harvest_gals += pond_data_harvestable_gallons
+                else:
+                    pond_data_afdw = 'No data'
+                    pond_data_depth = 'No data'
+                    pond_data_total_mass = 'n/a'
+                    pond_data_harvestable_depth = 'n/a'
+                    pond_data_harvestable_mass = 'n/a'
+                
                 # Query the data and update in data_dict
-                for idx, (key, value) in enumerate(data_dict.items()):
-                    query_name = key
-                    value[1] = data_query(date_single_pond_data, pond_name, query_name)
+                # for idx, (key, value) in enumerate(data_dict.items()):
+                #     query_name = key
+                #     value[1] = data_query(date_single_pond_data, pond_name, query_name)
                 
                 # Query and format (color code) of pests for each pond
                 indicators_data = date_single_pond_data[['pH', 'Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
@@ -371,6 +422,7 @@ class ponds_overview:
                                 'Diatoms': ['greater-equal', 0.5, 'D', 'xkcd:powder pink'],
                                 'Tetra': ['greater-equal', 0.5, 'T', 'purple'],
                                 'Green Algae': ['greater-equal', 0.5 , 'GA', 'green']} 
+                # append the abbreviated symbol to plot, and format color of indicator, to the pond_indicator_data list
                 pond_indicator_data = []
                 for idx, (key, val) in enumerate(indicator_dict.items()):
                     comparison_operator = val[0]
@@ -391,12 +443,9 @@ class ponds_overview:
                         epa_val = list(epa_data[pond_name]["epa_data"].values())[0] # get 0 index since data should be sorted by most-recent first
                     except:
                         epa_val = 'n/a'
-                else:
-                    epa_val = None
                 
                 # set fill color based on density (afdw) for now
-                density_data = data_dict['afdw'][1] # set density_data as the current pond density (AFDW) value to set subplot color val
-                if density_data == 'No data':
+                if pond_data_afdw == 'No data':
                     fill_color = 'lightgrey'
                 else:    
                     density_color_dict = {(0,0.249999999): 0, 
@@ -405,11 +454,11 @@ class ponds_overview:
                                           (0.80,999999999): 3}
                     color_list = ['red', 'yellow', 'mediumspringgreen', 'tab:green']
                     for idx, (key, val) in enumerate(density_color_dict.items()):
-                        if density_data >= key[0] and density_data < key[1]:
+                        if pond_data_afdw >= key[0] and pond_data_afdw < key[1]:
                             color_idx = val
                             fill_color = color_list[color_idx] 
                     # secondary fill color by EPA percentage
-                    if epa_val != None:
+                    if epa_data:
                         if epa_val == 'n/a':
                             fill_color='lightgrey'
                         elif color_idx > 0 and epa_val < 0.02:
@@ -418,134 +467,181 @@ class ponds_overview:
                             fill_color = 'yellow'
                 
             # Get the last harvest date for each pond, done separately from other data queries due to needing full range of dates, and regardless of whether it's active
+            # Get the date relative to the select_date parameter (so reports can always be generated relative to a specific date even for past dates)
             try:
-                pond_last_harvest = str(single_pond_data['Split Innoculum'].last_valid_index().date().strftime('%-m-%-d-%y'))
-               
-              ## TODO: Calculate growth rates since last harvest / and 3-day   
-                # import traceback
-                # last_harvest_idx = single_pond_data['Split Innoculum'].last_valid_index()
-                   # new_growth_idx = last_harvest_idx + pd.Timedelta(days=1)
-    #                 if pond_active == True:
-    #                     try:
-    #                         print(pond_name,'\n new growth start date: ', new_growth_idx)
-    #                         date_key = pd.to_datetime(select_date, errors='coerce').normalize()
-    #                         test_growth_pond = single_pond_data.loc[new_growth_idx:select_date][['AFDW (filter)', 'Depth']]
-
-    #                         depth_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
-    #                         # for the 6 and 8 columns, double the depth to liters conversion because they are twice the size
-    #                         if pond_name[-2:] == '06' or pond_name[-2:] == '08': 
-    #                             depth_to_liters *= 2
-
-    #                         # calculate total mass in each pond and add to aggregation of all ponds
-    #                         test_growth_pond['mass'] = test_growth_pond['Depth'] * depth_to_liters * test_growth_pond['AFDW (filter)']
-    #                         test_growth_pond['mass'] = test_growth_pond['mass']/1000
-    #                         quantiles_df = test_growth_pond[test_growth_pond['mass'] != 0]['mass']
-    #                         print('std dev: ', quantiles_df.std())
-    #                         print('mean: ', quantiles_df.mean())
-    #                         print(quantiles_df[np.abs(quantiles_df-quantiles_df.mean()) <= (3*quantiles_df.std())])
-
-
-    #                         quantile_low = quantiles_df.quantile(0.01)
-    #                         quantile_high = quantiles_df.quantile(0.99)
-    #                         iqr = quantile_high - quantile_low
-    #                         low_bound = quantile_low - (1.5*iqr)
-    #                         high_bound = quantile_high + (1.5*iqr)
-    #                         print('low quantile: ', quantile_low, '| high quantile: ', quantile_high)
-    #                         print('low bound: ', low_bound, '| high bound: ', high_bound)
-
-    #                         test_growth_pond['mass'] = test_growth_pond['mass'].replace(0, float('nan'))
-
-    #                         test_growth_pond['mass2'] = test_growth_pond['mass'].interpolate(method="spline", order=1, limit_direction="both")
-
-    #                         print(test_growth_pond)
-    #                     except Exception as ex:
-    #                         print(f'{pond_name}: error')
-    #                         print(''.join(traceback.TracebackException.from_exception(ex).format()))
+                last_harvest_idx = single_pond_data['Split Innoculum'].loc[:select_date].last_valid_index()
+                pond_last_harvest_str = last_harvest_idx.date().strftime('%-m-%-d-%y')
             except:
-                pond_last_harvest = 'n/a'
-
-            data_displays = ['title', ['depth', 'afdw'], 'harvestable_mass', 'growth']
-            for idx, item in enumerate(data_displays):
-                if item == 'title':
-                    # title subplot
-                    ax = plt.Subplot(fig, inner_plot[:2,:])
-                    
-                    # plot pond EPA data
-                    if epa_data:
-                        try:
-                            if epa_val == 'n/a':
-                                epa_val_str = 'No EPA data'
+                last_harvest_idx = 'n/a'
+                pond_last_harvest_str = 'n/a'
+                
+            ## Calculate growth rates since last harvest / and 5-day   
+            if last_harvest_idx != 'n/a':    
+                new_growth_start_idx = last_harvest_idx + pd.Timedelta(days=1)
+                if pond_active == True:       
+                        if new_growth_start_idx < select_date: # i.e., if pond has more than 1 day of growth
+                            # select only data for the period of growth that's being calculated
+                            pond_growth_df = single_pond_data.loc[new_growth_start_idx:select_date][['AFDW (filter)', 'Depth']]
+                            # calculate mass to use for calculating growth rate 
+                            pond_growth_df['mass'] = afdw_depth_to_mass(pond_growth_df['AFDW (filter)'], pond_growth_df['Depth'], pond_name)
+                            # replace 0 values with 'nan' for interpolation to work and fill gaps of missing data
+                            pond_growth_df['mass'] = pond_growth_df['mass'].replace(0, float('nan'))
+                            # interpolate missing data (will not fill beginning or end values if they're missing)
+                            pond_growth_df['mass'] = pond_growth_df['mass'].interpolate()
+                            # drop missing values after interpolation (should just be values at beginning of period)
+                            # but could also drop the current selection date if AFDW or Depth is missing for this day
+                            pond_growth_df = pond_growth_df.dropna(subset=['mass'])
+                            
+                            # calculate the number of growth days
+                            # Do this after dropping empty leading/trailing rows because those are not being included in growth calculation 
+                            # because there isn't a great method of linearly extrapolating and estimating mass values for those rows
+                            num_growth_days = (pond_growth_df.index[-1] - pond_growth_df.index[0]).days
+                            
+                            # calculate growth rates
+                            # assume last harvest date is not valid if growing days are more than 9
+                            if num_growth_days > 90: 
+                                daily_growth_rate_since_harvest = 'n/a'
                             else:
-                                epa_val_str = f'{epa_val * 100:.2f}% EPA'
-                            ax.text(0.8, 0.8, epa_val_str, ha='center', va='center')
-                        except:
-                            pass
+                                daily_growth_rate_since_harvest = round(((pond_growth_df['mass'].iloc[-1] - pond_growth_df['mass'].iloc[0]) / pond_growth_df['mass'].iloc[0])/num_growth_days,4)
+                            # just use a try/except clause since the 5 day growth calculation will cause error if there aren't 5 days of available data in the current growth period
+                            try:        
+                                daily_growth_rate_5_days = round(((pond_growth_df['mass'].iloc[-1] - pond_growth_df['mass'].iloc[-5]) / pond_growth_df['mass'].iloc[-5])/5,4)
+                            except:
+                                daily_growth_rate_5_days = 'n/a'
+                        else: # if pond has 1 or less days of growth (can't calculate rate)
+                            daily_growth_rate_since_harvest = 'n/a'
+                            daily_growth_rate_5_days = 'n/a'
                         
-                    ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
-                    ax.text(0.5, 0.5, f'last harvest/split: {pond_last_harvest}', ha='center', va='center')
-                    
-                    # Display pond pest/indicator info under subplot title for active ponds
-                    if pond_active == True:
-                        try:
-                            # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
-                            # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
-                            x0, y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
-                            x1, y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
-                            dx = x1 - x0
-                            dy = y1 - y0
-                            maxd = max(dx, dy)
-                            circle_width = .07 * maxd / dx
-                            circle_height = .07 * maxd / dy
+                        ## TODO: outlier detection (pond 0402 - 1/16/23 as example of outlier to remove)
+                        # import numpy as np
+#                         quantiles_df = pond_growth_df[pond_growth_df['mass'] != 0]['mass']
+#                         print('std dev: ', quantiles_df.std())
+#                         print('mean: ', quantiles_df.mean())
+#                         print(quantiles_df[np.abs(quantiles_df-quantiles_df.mean()) <= (3*quantiles_df.std())])
 
-                            width_indicator_data = len(pond_indicator_data)*(circle_width+.01) # get the width of the indicator data (when plotted in circles)
-                            calc_start_x = .5 - (width_indicator_data/2) + ((circle_width+0.01)/2) # calculate which X coord to start plotting indicators (to center them on each subplot)
-                            indicator_plot_y = .17
-                            x_space = circle_width + 0.01
-                            #if width_indicator_data > 0: 
-                            #    ax.text(calc_start_x - 0.05,indicator_plot_y, 'Indicators:', ha='right', va='center')
-                            for [indicator_string,color] in pond_indicator_data:
-                                ax.add_patch(Ellipse((calc_start_x, indicator_plot_y + 0.02), circle_width, circle_height, color=color, fill=color))
-                                ax.text(calc_start_x, indicator_plot_y, indicator_string, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
-                                calc_start_x += x_space
-                        except: 
-                            ax.text(0.5, 0.17, 'ERROR PLOTTING INDICATORS')
-                    
-                else:
-                    # data subplots
-                    ax = plt.Subplot(fig, inner_plot[2:,idx-1])
-                    
-                    # format data list item with a newline separator if there's more than one item (i.e., for 'depth' and 'afdw')
-                    if pond_active == True: 
-                        if type(item) == list:
-                            text_formatted = ''
-                            for idx, subitem in enumerate(item):
-                                text_formatted += data_display_format(data_dict[subitem])
-                                if idx+1 != len(item):
-                                    text_formatted += '\n'
-                        else:
-                            text_formatted = data_display_format(data_dict[item])
+#                         quantile_low = quantiles_df.quantile(0.01)
+#                         quantile_high = quantiles_df.quantile(0.99)
+#                         iqr = quantile_high - quantile_low
+#                         low_bound = quantile_low - (1.5*iqr)
+#                         high_bound = quantile_high + (1.5*iqr)
+#                         print('low quantile: ', quantile_low, '| high quantile: ', quantile_high)
+#                         print('low bound: ', low_bound, '| high bound: ', high_bound)
+                                
+            # title subplot
+            title_ax = plt.Subplot(fig, inner_plot[:2,:])
 
-                        # Plot data text for each item
-                        t = ax.text(0.5, 0.5, text_formatted, ha='center', va='center')
+            # plot pond EPA data
+            if epa_data:
+                try:
+                    if epa_val == 'n/a':
+                        epa_val_str = 'No EPA data'
+                    else:
+                        epa_val_str = f'{epa_val * 100:.2f}% EPA'
+                    title_ax.text(0.8, 0.8, epa_val_str, ha='center', va='center')
+                except:
+                    pass
 
-                        ax.set_facecolor(fill_color)
-                    
-                    else: # if pond is inactive or data_error
-                        if idx == 2: # plot in the middle of the lower 3 subplots
-                            if pond_data_error == True:
-                                t = ax.text(0.5, 0.9, 'Data Error', ha='center', va='top')
-                            else:
-                                t = ax.text(0.5, 0.9, 'Inactive', ha='center', va='top')
-                        ax.set_facecolor('snow')
+            title_ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
+            title_ax.text(0.5, 0.5, f'last harvest/split: {pond_last_harvest_str}', ha='center', va='center')
 
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['bottom'].set_visible(False)
-                ax.spines['left'].set_visible(False)
-                ax.get_xaxis().set_ticks([])
-                ax.get_yaxis().set_ticks([])
-                fig.add_subplot(ax)
+            # Display pond pest/indicator info under subplot title for active ponds
+            if pond_active == True:
+                try:
+                    # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
+                    # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
+                    x0, y0 = title_ax.transAxes.transform((0, 0)) # lower left in pixels
+                    x1, y1 = title_ax.transAxes.transform((1, 1)) # upper right in pixes
+                    dx = x1 - x0
+                    dy = y1 - y0
+                    maxd = max(dx, dy)
+                    circle_width = .07 * maxd / dx
+                    circle_height = .07 * maxd / dy
+
+                    width_indicator_data = len(pond_indicator_data)*(circle_width+.01) # get the width of the indicator data (when plotted in circles)
+                    calc_start_x = .5 - (width_indicator_data/2) + ((circle_width+0.01)/2) # calculate which X coord to start plotting indicators (to center them on each subplot)
+                    indicator_plot_y = .18
+                    x_space = circle_width + 0.01
+                    #if width_indicator_data > 0: 
+                    #    ax.text(calc_start_x - 0.05,indicator_plot_y, 'Indicators:', ha='right', va='center')
+                    for [indicator_string,color] in pond_indicator_data:
+                        title_ax.add_patch(Ellipse((calc_start_x, indicator_plot_y + 0.02), circle_width, circle_height, color=color, fill=color))
+                        title_ax.text(calc_start_x, indicator_plot_y, indicator_string, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
+                        calc_start_x += x_space
+                except: 
+                    title_ax.text(0.5, 0.15, 'ERROR PLOTTING INDICATORS', ha='center')                   
+            subplot_ax_format(title_ax)
             
+            
+            if pond_active == True: 
+                # format depth data points 
+                if pond_data_depth == 0:
+                    pond_data_depth = '-'
+                else:
+                    pond_data_depth = str(round(pond_data_depth,2))
+                if pond_data_harvestable_depth == 0:
+                    pond_data_harvestable_depth = '-'
+                else:
+                    pass # don't need to update in this case
+                
+                # format harvestable mass
+                if pond_data_harvestable_mass == 0:
+                    pond_data_harvestable_mass = '-'
+                else:
+                    pond_data_harvestable_mass = f'{pond_data_harvestable_mass} \ kg' 
+                
+                # format growth rates due to needing to add "\" before "%" sign with matplotlib boldface formatting, 
+                # and being unable to add with f-string 
+                if daily_growth_rate_since_harvest != 'n/a':
+                    daily_growth_rate_since_harvest_formatted = str(round(daily_growth_rate_since_harvest * 100,2)) + '\%'
+                else:
+                    daily_growth_rate_since_harvest_formatted = 'n/a'
+                if daily_growth_rate_5_days != 'n/a':
+                    daily_growth_rate_5_days_formatted = str(round(daily_growth_rate_5_days * 100,2)) + '\%'
+                else: 
+                    daily_growth_rate_5_days_formatted = 'n/a'
+                    
+                data_dict_test = [{'Measurement': {'Depth': pond_data_depth, 'AFDW': round(pond_data_afdw,3)}},
+                                  {'Harvestable': {'Mass': pond_data_harvestable_mass, 
+                                                   'Depth': pond_data_harvestable_depth}},
+                                  {'Daily Growth': {'Since Last H/S': daily_growth_rate_since_harvest_formatted,  
+                                                    '5 Days': daily_growth_rate_5_days_formatted}
+                                  }]
+
+            # data_dict_test = [{'Depth (in.)': 13, 'AFDW': 0.506},
+            #                   {'Harvestable': {'Mass (kg)': '1,284', 'Depth (in.)': '1.5'}},
+            #                   {'Daily Growth': {'Since Last H\S': '5.34\%', '5 Days': '3.45\%'}}]
+            
+            # data subplots   
+            for idx in range(3):
+                ax = plt.Subplot(fig, inner_plot[2:,idx])
+
+                # format data list item with a newline separator if there's more than one item (i.e., for 'depth' and 'afdw')
+                if pond_active == True: 
+                    text_formatted = ''
+                    for idx2, (key, val) in enumerate(data_dict_test[idx].items()):
+                        text_formatted += f'{key}:\n'
+                        if type(val) == dict:
+                            for sub_idx, (sub_key, sub_val) in enumerate(val.items(), start=1):
+                                text_formatted += f'{sub_key}\n'
+                                text_formatted += r'$\bf{' + str(sub_val) + '}$'
+                                text_formatted += '%s' %('\n' if sub_idx != len(val) else '') 
+                        else:
+                            text_formatted += r'$\bf{' + str(val) + '}$'
+                        if idx2+1 != len(data_dict_test[idx]):
+                            text_formatted += '\n'
+                 
+                    # Plot formatted datatext for each item
+                    t = ax.text(0.5, 0.1, text_formatted, ha='center', va='bottom')
+                    ax.set_facecolor(fill_color)
+                    
+                else: # if pond is inactive or data_error
+                    if idx == 1: # plot in the middle of the lower 3 subplots
+                        if pond_data_error == True:
+                            t = ax.text(0.5, 0.9, 'Data Error', ha='center', va='top')
+                        else:
+                            t = ax.text(0.5, 0.9, 'Inactive', ha='center', va='top')
+                    ax.set_facecolor('snow')
+                subplot_ax_format(ax)
             
         ##############################
         ### START OF PLOTTING CODE ###
@@ -584,7 +680,7 @@ class ponds_overview:
         # Initialize main plot
         plt_width = 8.5
         plt_height = 11
-        scale_factor = 2.5
+        scale_factor = 3
         fig = plt.figure(figsize=(plt_width*scale_factor, plt_height*scale_factor))
         outer_plots = gridspec.GridSpec(len(title_labels), len(title_labels[0]), wspace=0.05, hspace=0.1)
         
@@ -614,7 +710,7 @@ class ponds_overview:
                                         "0.25 - 0.49     or      2% - 3.49%:     Yellow\n"
                                         "0.50 - 0.79    and          "r'$\geq$'" 3.5%:     Light Green\n"
                                         "     "r'$\geq$'" 0.80    and          "r'$\geq$'" 3.5%:     Dark Green\n"
-                                        "Incomplete data for current day:     Grey"
+                                        "                        Incomplete data:     Grey"
                                        )
                     else:
                            legend_text = (
@@ -631,7 +727,7 @@ class ponds_overview:
                 if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot    
                     indicators_legend_text = (
                                   r'$\bf{Indicators }$' "\n"
-                                  r'% Nanno: < 80%                 %N (red)' "\n"
+                                  r'% Nanno: < 80%                  %N (red)' "\n"
                                   r'pH: out of 7.8 - 8.2 range      pH (red)' "\n"
                                   r'Rotifers: $\geq$ 1                         R (blue)' "\n"
                                   r'Attached FD111: $\geq$ 1           FD-A (brown)' "\n"
@@ -750,7 +846,7 @@ class ponds_overview:
                     text_x = [0.195, 0.5, 0.805]
 
                 for idx, item in enumerate(single_pond_data):
-                    text_date_formatted =  item[0].strftime("%_m/%_d/%y")
+                    text_date_formatted =  item[0].strftime("%-m/%-d/%y")
                     epa_ax.text(text_x[idx], 0.7, text_date_formatted, ha='center', va='center')
                     text_epa_data_formatted =  f'{item[1]*100: .2f}%'
                     epa_ax.text(text_x[idx], 0.3, text_epa_data_formatted, ha='center', va='center', fontsize='large', weight='bold')
