@@ -384,10 +384,10 @@ class ponds_overview:
                 if pond_data_afdw == 0:
                     fill_color = 'lightgrey'
                 else:    
-                    density_color_dict = {(0.000000001,0.249999999): 0, 
-                                          (0.25,0.499999999): 1,
-                                          (0.5,0.799999999): 2, 
-                                          (0.80,999999999): 3}
+                    density_color_dict = {(0.000000001,0.25): 0, 
+                                          (0.250000001,0.5): 1,
+                                          (0.500000001,0.8): 2, 
+                                          (0.800000001,999999999): 3}
                     color_list = ['red', 'yellow', 'mediumspringgreen', 'tab:green']
                     for idx, (key, val) in enumerate(density_color_dict.items()):
                         if pond_data_afdw >= key[0] and pond_data_afdw < key[1]:
