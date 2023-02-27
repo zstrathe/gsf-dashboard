@@ -6,12 +6,43 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse
 import sys
-import re
 import argparse
 from datetime import datetime
 from office365.sharepoint.client_context import ClientContext
+from configparser import ConfigParser
+from os.path import getsize, isfile
+from O365 import Account, FileSystemTokenBackend
+import traceback
 
 def main(argv):
+    def send_email(recipients, subject, msg_body, attachment_path=None):
+        email_settings = load_setting('email_cred')
+        credentials = (email_settings['client_id'], email_settings['client_secret'])
+        tenant = email_settings['tenant']
+        token_backend = FileSystemTokenBackend(token_path='./automation/auth_data/', token_filename='outlook_auth_token.txt') # save token for email auth to re-use 
+        account = Account(credentials, auth_flow_type='authorization', tenant_id=tenant, token_backend=token_backend)
+        if not account.is_authenticated:  # will check if there is a token and has not expired
+            # ask for a login 
+            account.authenticate(scopes=['basic', 'message_all'])
+        message = account.mailbox().new_message()
+        message.to.add(recipients) 
+        message.subject = subject
+        message.body = msg_body
+        if attachment_path:
+          message.attachments.add(attachment_path)
+        message.send()
+        print('Email successfully sent!')
+    
+    def failure_notify_email_exit(failure_reason, traceback=None):
+        print(failure_reason)
+        email_msg_info = load_setting('email_failure_msg')
+        send_email(recipients = [x.strip() for x in email_msg_info['recipients'].split(',')], 
+                   # split recipients on ',' and remove whitespace because ConfigParser will import it as a single string, but should be a list if more than 1 address
+                    subject = f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}', # add date to the end of the email subject
+                    msg_body = f'{failure_reason}{f"<br><br>Traceback:<br>{traceback}" if traceback else ""}'
+                  )
+        sys.exit(1)
+                
     parser = argparse.ArgumentParser()
     parser.add_argument("-i","--input_file", help="OPTIONAL: Excel (.xls or .xlsx) input file for EPA data (default = None)")
     parser.add_argument("-d","--date", required=True, help="Date to generate report for in 'yyyy-mm-dd' format; year must be from 2020 to 2023")
@@ -19,80 +50,87 @@ def main(argv):
     args = parser.parse_args()
     
     # check that file (OPTIONAL EPA DATA) is an excel file
-    file_extension = args.input_file.split(".")[-1]
-    if not (file_extension == 'xlsx' or file_extension == 'xls'):
-        print("ERROR: scorecard data input filetype should be .xlsx or .xls")
-        sys.exit(2)
+    if args.input_file:
+        if not isfile(args.input_file):
+            failure_notify_email_exit(f'ERROR: EPA data file specified ({args.input_file}) does not exist!')
+        file_extension = args.input_file.split(".")[-1]
+        if not (file_extension == 'xlsx' or file_extension == 'xls'):
+            failure_notify_email_exit('ERROR: EPA data filetype should be .xlsx or .xls')
     
-    # check if date argument is valid
-    date_error_flag = False
-    date_pattern = re.compile(r'[0-9]{4}-[0-9]{2}-[0-9]{2}')
-    if not re.fullmatch(date_pattern, args.date):
-        date_error_flag = True
-    else:    
-        date_split = args.date.split("-")
-        for idx, number in enumerate(date_split):
-            # check that year is between 2020 and 2023
-            if idx == 0:
-                if int(number) < 2020 or int(number) > 2023:
-                    date_error_flag = True
-                    break
-            # check that month value (as an integer) is from 1-12        
-            elif idx == 1:
-                if int(number) < 1 or int(number) > 12:
-                    date_error_flag = True
-                    break
-            # check that date value (as an integer) is from 1-31
-            elif idx == 2:
-                if int(number) < 1 or int(number) > 31:
-                    date_error_flag = True
-                    break
-    if date_error_flag == True:
-        print("ERROR: invalid date (should be 'yyyy-mm-ddd' between 2020 and 2023)")
-        sys.exit(2)
+    # check if date argument is valid, use try/except clause with datetime.strptime because it will generate an error with invalid date
+    try:
+        date_check = datetime.strptime(args.date, '%Y-%m-%d')
+    except:
+        invalid_date = args.date
+        args.date = '9999-01-01' # set to something ridiculous that's still a valid date so the error email will still generate, since date is added to the subject line
+        failure_notify_email_exit(f'Invalid date specified: {invalid_date}', tb)
     
     # check if optional target_density argument is valid (between 0 and 1)
     if args.target_density:
         if not (args.target_density > 0 and args.target_density < 1):
-            print("ERROR: target density (AFDW) should be between 0 and 1")
-            sys.exit(2)
+            failure_notify_email_exit("ERROR: target density (AFDW) should be between 0 and 1")
     
     # initialize ponds_overview class
     overview = ponds_overview()
     
-    # download latest daily data from sharepoint
-    datafile = overview.download_scorecard_data()
-    
-    # load data, including optional EPA data if provided as arg
+    # download latest daily data from sharepoint, use try/except clause to catch potential error and email traceback data for debugging
+    try:
+        datafile = overview.download_scorecard_data()
+        if datafile == False: # checking if valid
+            failure_notify_email_exit('Error downloading scorecard data')
+    except Exception as ex:
+        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
+        failure_notify_email_exit('Error downloading scorecard data', tb) 
+        
+    # load data, including optional EPA data if provided as arg, use try/except clause to catch potential error and email traceback data for debugging
     print('Loading data...')
-    ponds_data = overview.load_scorecard_data(datafile)
-    if args.input_file:
-        epa_data = overview.load_epa_data(args.input_file) 
-    else:
-        epa_data = None
+    try:
+        ponds_data = overview.load_scorecard_data(datafile)    
+        if args.input_file:
+            epa_data = overview.load_epa_data(args.input_file) 
+        else:
+            epa_data = None
+    except Exception as ex:
+        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
+        failure_notify_email_exit('Error loading data', tb) 
+        
     print('Plotting data...')
     ''' plot() method will return the output filename, so save it as a variable, then print it so that bash automation script 
         can access it from the last line of python stdout '''
-    out_filename = overview.plot_scorecard(ponds_data=ponds_data, select_date=args.date, epa_data=epa_data, target_to_density=args.target_density) 
-    print(f'Plot saved to:\n{out_filename}')
+    try:
+        out_filename = overview.plot_scorecard(ponds_data=ponds_data, select_date=args.date, epa_data=epa_data, target_to_density=args.target_density) 
+        print(f'Plot saved to:\n{out_filename}')
+    except Exception as ex:
+        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
+        failure_notify_email_exit('Error plotting data', tb) 
+        
+    print('Emailing message with attachment...')
+    email_msg_info = load_setting('email_msg')
+    send_email(recipients = [x.strip() for x in email_msg_info['recipients'].split(',')], 
+               # split recipients on ',' and remove whitespace because ConfigParser imports as a single string, but needs to be a list of each email string 
+                subject = f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}', # add date to the end of the email subject
+                msg_body = email_msg_info['body'],
+                attachment_path = out_filename) 
     sys.exit(0) # exit with status 0 to indicate successful execution
-    
+
+# load auth credentials & settings from settings.cfg file
+def load_setting(specified_setting):
+    cp = ConfigParser()
+    cp.read('./automation/settings.cfg')
+    return dict(cp.items(specified_setting))   
+
 class ponds_overview:
     def __init__(self):
-        pass
+        self.ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201 ', 
+                          '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
+                          '0103', '0203', '0303', '0403', '0503', '0603', '0703', '0803', '0903', '1003', '1103', '1203',
+                          '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
+                          '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
+                          '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
     
     def download_scorecard_data(self):
-        from configparser import ConfigParser
-        
-        # load sharepoint credentials, site, file url from settings.cfg file
-        def load_sharepoint_settings(specified_setting):
-            cp = ConfigParser()
-            config_file = './automation/settings.cfg'
-            cp.read(config_file)
-            return dict(cp.items(specified_setting))
-     
-        sharepoint_site, file_url = load_sharepoint_settings('scorecard_data_path').values()
-        ctx = ClientContext(sharepoint_site).with_client_certificate(**load_sharepoint_settings('cert_credentials'))
+        sharepoint_site, file_url = load_setting('scorecard_data_path').values()
+        ctx = ClientContext(sharepoint_site).with_client_certificate(**load_setting('sharepoint_cert_credentials'))
         download_path = './data_sources/scorecard_data.xlsx'
         with open(download_path, "wb") as local_file:
             print('Downloading latest scorecard data')
@@ -100,11 +138,15 @@ class ponds_overview:
                 try:
                     [print(f'Attempt {i+1}/5') if i > 0 else ''][0]
                     ctx.web.get_file_by_server_relative_url(file_url).download_session(local_file, lambda x: print(f'Downloaded {x/1e6:.2f} MB'),chunk_size=int(5e6)).execute_query()
-                    print(f'Successful file download to {download_path}')
                     break
                 except:
                     print('Download error...trying again')
-        return download_path
+        if getsize(download_path) > 35000000: 
+            print(f'Daily scorecard file successfully downloaded to {download_path}')
+            return download_path
+        else:
+            print('Daily scorecard file download error')
+            return False
         
     def load_scorecard_data(self, excel_filename):
         # Load the Daily Pond Scorecard excel file
@@ -114,12 +156,7 @@ class ponds_overview:
         sheetnames = sorted(excel_sheets.sheet_names)
 
         # initialize list of ponds corresponding to excel sheet names #### NOTE: '1201 ' has a trailing space that should be fixed in excel file
-        ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201 ', 
-                      '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
-                      '0103', '0203', '0303', '0403', '0503', '0603', '0703', '0803', '0903', '1003', '1103', '1203',
-                      '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
-                      '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
-                      '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
+        ponds_list = self.ponds_list
         
         # create a dict containing a dataframe for each pond sheet
         all_ponds_data = {}
@@ -177,13 +214,7 @@ class ponds_overview:
                 pond_num = '0' + pond_num
             ponds_data[pond_num]['source'] = source_str
 
-        # initialize list of ponds 
-        ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
-                      '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
-                      '0103', '0203', '0303', '0403', '0503', '0603', '0703', '0803', '0903', '1003', '1103', '1203',
-                      '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
-                      '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
-                      '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
+        ponds_list = self.ponds_list
 
         # create a dict with an empty list for each pond number (to store date and epa value)
         ponds_data = {k: {'source': '', 'epa_data':{}} for k in ponds_list} 
@@ -385,9 +416,9 @@ class ponds_overview:
                     fill_color = 'lightgrey'
                 else:    
                     density_color_dict = {(0.000000001,0.25): 0, 
-                                          (0.250000001,0.5): 1,
-                                          (0.500000001,0.8): 2, 
-                                          (0.800000001,999999999): 3}
+                                          (0.25,0.5): 1,
+                                          (0.50,0.8): 2, 
+                                          (0.80,999999999): 3}
                     color_list = ['red', 'yellow', 'mediumspringgreen', 'tab:green']
                     for idx, (key, val) in enumerate(density_color_dict.items()):
                         if pond_data_afdw >= key[0] and pond_data_afdw < key[1]:
@@ -933,7 +964,7 @@ class ponds_overview:
         
         out_filename = f'./output_files/{plot_title} {title_date.strftime("%Y-%m-%d")}.pdf'
         if save_output == True:
-            plt.savefig(out_filename, bbox_inches='tight')
+            plt.savefig(out_filename, bbox_inches='tight')     
         fig.show() 
         return out_filename
         
