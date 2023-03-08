@@ -71,38 +71,11 @@ def main(argv):
             failure_notify_email_exit("ERROR: target density (AFDW) should be between 0 and 1")
     
     # initialize ponds_overview class
-    overview = ponds_overview()
-    
-    # download latest daily data from sharepoint, use try/except clause to catch potential error and email traceback data for debugging
     try:
-        datafile = overview.download_scorecard_data()
-        if datafile == False: # checking if valid
-            failure_notify_email_exit('Error downloading scorecard data')
+        overview = ponds_overview(args.date)
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
-        failure_notify_email_exit('Error downloading scorecard data', tb) 
-        
-    # load data, including optional EPA data if provided as arg, use try/except clause to catch potential error and email traceback data for debugging
-    print('Loading data...')
-    try:
-        ponds_data = overview.load_scorecard_data(datafile)    
-        if args.input_file:
-            epa_data = overview.load_epa_data(args.input_file) 
-        else:
-            epa_data = None
-    except Exception as ex:
-        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
-        failure_notify_email_exit('Error loading data', tb) 
-        
-    print('Plotting data...')
-    ''' plot() method will return the output filename, so save it as a variable, then print it so that bash automation script 
-        can access it from the last line of python stdout '''
-    try:
-        out_filename = overview.plot_scorecard(ponds_data=ponds_data, select_date=args.date, epa_data=epa_data, target_to_density=args.target_density) 
-        print(f'Plot saved to:\n{out_filename}')
-    except Exception as ex:
-        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
-        failure_notify_email_exit('Error plotting data', tb) 
+        failure_notify_email_exit(f'Error running pond overview script', tb)
         
     print('Emailing message with attachment...')
     email_msg_info = load_setting('email_msg')
@@ -110,7 +83,7 @@ def main(argv):
                # split recipients on ',' and remove whitespace because ConfigParser imports as a single string, but needs to be a list of each email string 
                 subject = f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}', # add date to the end of the email subject
                 msg_body = email_msg_info['body'],
-                attachment_path = out_filename) 
+                attachment_path = overview.out_filename) 
     sys.exit(0) # exit with status 0 to indicate successful execution
 
 # load auth credentials & settings from settings.cfg file
@@ -120,14 +93,23 @@ def load_setting(specified_setting):
     return dict(cp.items(specified_setting))   
 
 class ponds_overview:
-    def __init__(self):
-        self.ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201 ', 
+    def __init__(self, select_date):
+        self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
+        self.ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
                           '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
                           '0103', '0203', '0303', '0403', '0503', '0603', '0703', '0803', '0903', '1003', '1103', '1203',
                           '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
                           '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
                           '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
-    
+        self.scorecard_datafile = self.download_scorecard_data()
+        self.scorecard_dataframe = self.load_scorecard_data(self.scorecard_datafile)
+        self.epa_data_dict = self.load_epa_data('data_sources/epa_data.xlsx', 'data_sources/Pond History.xlsx')
+        self.num_active_ponds = 0 
+        self.num_active_ponds_sm = 0 
+        self.num_active_ponds_lg = 0
+        self.ponds_active_status = {key:self.check_active(pond_scorecard_data=self.scorecard_dataframe, select_date=select_date, pond_name=key, num_days_prior=5) for key in self.ponds_list}
+        self.out_filename = self.plot_scorecard(ponds_data=self.scorecard_dataframe, select_date=self.select_date, epa_data=self.epa_data_dict)
+
     def download_scorecard_data(self):
         sharepoint_site, file_url = load_setting('scorecard_data_path').values()
         ctx = ClientContext(sharepoint_site).with_client_certificate(**load_setting('sharepoint_cert_credentials'))
@@ -141,7 +123,10 @@ class ponds_overview:
                     break
                 except:
                     print('Download error...trying again')
-        if getsize(download_path) > 35000000: 
+                    if i == 4:
+                        print('Daily scorecard file download error')
+                        return False
+        if getsize(download_path) > 35000000:  # check that downloaded filesize is > 35 MB, in case of any download error
             print(f'Daily scorecard file successfully downloaded to {download_path}')
             return download_path
         else:
@@ -149,6 +134,7 @@ class ponds_overview:
             return False
         
     def load_scorecard_data(self, excel_filename):
+        print('Loading scorecard data...')
         # Load the Daily Pond Scorecard excel file
         excel_sheets = pd.ExcelFile(excel_filename)
 
@@ -176,10 +162,10 @@ class ponds_overview:
             df = df.set_index(df['date'].name) # set date column as index
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
             updated_ponds[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
+        print('Scorecard data loaded!')
         return updated_ponds # return the cleaned data dict
     
     def load_epa_data(self, excel_epa_data, excel_pond_history="") -> dict:
-
         def process_epa_row(sample_label, epa_val):
             label_split = sample_label.split()
 
@@ -213,7 +199,9 @@ class ponds_overview:
             if len(pond_num) == 3:
                 pond_num = '0' + pond_num
             ponds_data[pond_num]['source'] = source_str
-
+        
+        print('Loading EPA data...')
+        
         ponds_list = self.ponds_list
 
         # create a dict with an empty list for each pond number (to store date and epa value)
@@ -238,9 +226,46 @@ class ponds_overview:
                 for idx2, (date_key, date_val) in enumerate(ponds_data[pond_num]['epa_data'].copy().items()):
                     if len(date_val) > 0:
                         ponds_data[pond_num]['epa_data'][date_key] = sum(date_val) / len(date_val)
+        print('EPA data loaded!')
         return ponds_data 
 
+    # helper function to check if a pond has data from prior n-days from the selected date 
+    def check_active(self, pond_scorecard_data, select_date, pond_name, num_days_prior):
+        def check_active_query(prev_day_n): 
+            try:
+                dat = pond_scorecard_data[pond_name][['Fo','Split Innoculum']].shift(prev_day_n).loc[select_date]
+                if pd.isna(dat[1]) == False:
+                    # check if pond is noted as "I" for inactive in the "Split Innoculum" column, 
+                    # if so, break immediately and return False in the outer function (return that the particular pond is "inactive")
+                    if dat[1].upper() == 'I': 
+                        return 'FalseBreakImmediate'
+                elif pd.isna(dat[0]) or dat[0] == 0: # if data is NaN or 0
+                    return False
+                else:
+                    return True # 
+            except:
+                return False
+        for n in range(0,num_days_prior+1):
+            prev_n_day_active = check_active_query(n)
+            if prev_n_day_active == True:
+                #nonlocal num_active_ponds, num_active_ponds_sm, num_active_ponds_lg
+                #check if pond is in the '06' or '08' column by checking the last values in name
+                if pond_name[2:] == '06' or pond_name[2:] == '08':
+                     self.num_active_ponds_lg += 1
+                else:
+                    self.num_active_ponds_sm += 1
+                self.num_active_ponds += 1
+                return True
+            elif prev_n_day_active == 'FalseBreakImmediate':
+                return False
+            elif n == num_days_prior and prev_n_day_active == False:
+                return False
+            else:
+                pass
+
+    
     def plot_scorecard(self, ponds_data, select_date, epa_data=None, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, save_output=True, plot_title='Pond Health Overview'): 
+        print('Plotting pond overview...')
         # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
         select_date = pd.to_datetime(select_date).normalize()
         
@@ -255,38 +280,38 @@ class ponds_overview:
         num_active_ponds_lg = 0 # number of active 2.2 acre ponds
         
         # helper function to check if a pond has data from prior n-days from the selected date 
-        def check_active(ponds_data, pond_name, num_days_prior):
-            def check_active_query(prev_day_n): 
-                try:
-                    dat = ponds_data[pond_name][['Fo','Split Innoculum']].shift(prev_day_n).loc[select_date]
-                    if pd.isna(dat[1]) == False:
-                        # check if pond is noted as "I" for inactive in the "Split Innoculum" column, 
-                        # if so, break immediately and return False in the outer function
-                        if dat[1].upper() == 'I': 
-                            return 'FalseBreakImmediate'
-                    elif pd.isna(dat[0]) or dat[0] == 0:
-                        return False
-                    else:
-                        return True
-                except:
-                    return False
-            for n in range(0,num_days_prior+1):
-                prev_n_day_active = check_active_query(n)
-                if prev_n_day_active == True:
-                    nonlocal num_active_ponds, num_active_ponds_sm, num_active_ponds_lg
-                    #check if pond is in the '06' or '08' column by checking the last values in name
-                    if pond_name[2:] == '06' or pond_name[2:] == '08':
-                        num_active_ponds_lg += 1
-                    else:
-                        num_active_ponds_sm += 1
-                    num_active_ponds += 1
-                    return True
-                elif prev_n_day_active == 'FalseBreakImmediate':
-                    return False
-                elif n == num_days_prior and prev_n_day_active == False:
-                    return False
-                else:
-                    pass
+        # def check_active(ponds_data, pond_name, num_days_prior):
+        #     def check_active_query(prev_day_n): 
+        #         try:
+        #             dat = ponds_data[pond_name][['Fo','Split Innoculum']].shift(prev_day_n).loc[select_date]
+        #             if pd.isna(dat[1]) == False:
+        #                 # check if pond is noted as "I" for inactive in the "Split Innoculum" column, 
+        #                 # if so, break immediately and return False in the outer function
+        #                 if dat[1].upper() == 'I': 
+        #                     return 'FalseBreakImmediate'
+        #             elif pd.isna(dat[0]) or dat[0] == 0:
+        #                 return False
+        #             else:
+        #                 return True
+        #         except:
+        #             return False
+        #     for n in range(0,num_days_prior+1):
+        #         prev_n_day_active = check_active_query(n)
+        #         if prev_n_day_active == True:
+        #             nonlocal num_active_ponds, num_active_ponds_sm, num_active_ponds_lg
+        #             #check if pond is in the '06' or '08' column by checking the last values in name
+        #             if pond_name[2:] == '06' or pond_name[2:] == '08':
+        #                 num_active_ponds_lg += 1
+        #             else:
+        #                 num_active_ponds_sm += 1
+        #             num_active_ponds += 1
+        #             return True
+        #         elif prev_n_day_active == 'FalseBreakImmediate':
+        #             return False
+        #         elif n == num_days_prior and prev_n_day_active == False:
+        #             return False
+        #         else:
+        #             pass
         
         # helper function to query data from previous days, if it is not available for current day
         def current_or_prev_query(df, col_name, num_prev_days, return_prev_day_num=False):
@@ -325,7 +350,8 @@ class ponds_overview:
             inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=-0.01, hspace=-0.01)
 
             # Check prior 5 days of data to see if pond is active/in-use
-            pond_active = check_active(ponds_data, pond_name, 5)
+            pond_active = self.ponds_active_status[pond_name]
+            #pond_active = check_active(ponds_data, pond_name, 5)
 
             try:
                 single_pond_data = ponds_data[pond_name]
@@ -542,7 +568,6 @@ class ponds_overview:
                     title_ax.text(0.5, 0.15, 'ERROR PLOTTING INDICATORS', ha='center')                   
             subplot_ax_format(title_ax)
             
-            
             if pond_active == True: 
                 # format depth data points 
                 if pond_data_depth == 0:
@@ -714,9 +739,9 @@ class ponds_overview:
                     t = ax.text(0.1,0.62,indicators_legend_text,ha='left', va='center', 
                            bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
                 elif 'BLANK 13-1' in pond_name:
-                    print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
-                                    + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{num_active_ponds_sm}\n'
-                                    + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{num_active_ponds_lg}\n'
+                    print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{self.num_active_ponds}\n' 
+                                    + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{self.num_active_ponds_sm}\n'
+                                    + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{self.num_active_ponds_lg}\n'
                                    + r'$\bf{Total\/\/mass\/\/(all\/\/ponds):}$' + f'{total_mass_all:,} kg')
                     t = ax.text(0,.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
                 elif 'BLANK 13-3' in pond_name:
@@ -772,7 +797,10 @@ class ponds_overview:
         # function to plot each pond to ensure that data for each plot is kept within a local scope
         def plot_each_pond(ponds_data, fig, pond_plot, pond_name):
             inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=0, hspace=0)
-
+            
+            # get pond active status (True or False) from ponds_active_status dict
+            pond_active = self.ponds_active_status[pond_name]
+            
             # get data for individual pond only, as a list
             # each list entry should consist of a tuple containing the date and the epa value, sorted in descending order by date
             single_pond_data = list(ponds_data[pond_name]['epa_data'].items())
@@ -793,93 +821,101 @@ class ponds_overview:
 
             # epa data subplots
             epa_ax = plt.Subplot(fig, inner_plot[1:3,:])
-
-            # set fill color based on latest EPA reading
-            if len(single_pond_data) > 0:
-                # set lastest_epa_data as the first value in single_pond_data (which should be reverse sorted)
-                latest_epa_data = single_pond_data[0][1] 
-                fill_color_dict = {(0,0.0199999999):'red', 
-                                   (0.02,0.0349999999): 'yellow',
-                                   (0.035,99999999999): 'mediumspringgreen'}
-                for idx, (key, val) in enumerate(fill_color_dict.items()):
-                    if latest_epa_data >= key[0] and latest_epa_data < key[1]:
-                        fill_color = val 
-            else:
-                # set fill color as light grey if there is no EPA data for the pond
-                fill_color = 'whitesmoke'
-
-            subplot_ax_format(epa_ax, fill_color)
-
-            if len(single_pond_data) > 0:
-                # set the center-point of each data point on the subplot, depending on number of data points available
-                if len(single_pond_data) == 1:
-                    text_x = [0.5]
-                elif len(single_pond_data) == 2:
-                    text_x = [0.3, 0.7]
-                else:
-                    text_x = [0.195, 0.5, 0.805]
-
-                for idx, item in enumerate(single_pond_data):
-                    text_date_formatted =  item[0].strftime("%-m/%-d/%y")
-                    epa_ax.text(text_x[idx], 0.7, text_date_formatted, ha='center', va='center')
-                    text_epa_data_formatted =  f'{item[1]*100: .2f}%'
-                    epa_ax.text(text_x[idx], 0.3, text_epa_data_formatted, ha='center', va='center', fontsize='large', weight='bold')
-            else:
-                epa_ax.text(0.5, 0.5, 'No Data', ha='center', va='center')
-
-            # epa change
-            epa_pct_ax = plt.Subplot(fig, inner_plot[3:,:])
-
-            # Get the % change in EPA values if there is >1 entry (use the first and last indexes of the single_pond_data list)
-            if len(single_pond_data) != 0:
-                epa_pct_fill = 'xkcd:light grey'    
-                
-                def calc_epa_pct_chg(data_curr: list, data_prev: list):
-                    '''
-                    inputs:
-                        data_curr: [datetime value, epa float value]
-                        data_prev: [datetime value, epa float value]
-                    
-                    output:
-                        pct_chg: calculated absolute change in percentage rounded to 2 decimal places and formatted with % character (str)
-                        delta_days: number of days between readings (int)
-                        pct_format_color: color for displaying percentage (str)
-                    '''
-                    delta_days = (data_curr[0] - data_prev[0]).days    
-                    
-                    pct_chg = (data_curr[1] - data_prev[1]) * 100
-                    if pct_chg > 0:
-                        pct_format_color = 'xkcd:emerald green'
-                        pct_chg = f'+{pct_chg:.2f}%'
-                    elif pct_chg < 0: 
-                        pct_format_color = 'xkcd:fire engine red'
-                        pct_chg = f'{pct_chg:.2f}%'
-                    else:
-                        pct_format_color = 'black'
-                        pct_chg = f'{pct_chg:.2f}%'
-                    return [pct_chg, delta_days, pct_format_color]
-                    # else:
-                    #     return ['n/a', delta_days, 'black']
-                
-                if len(single_pond_data) == 2:
-                    epa_pct_chg, delta_days, epa_pct_color = calc_epa_pct_chg(single_pond_data[0], single_pond_data[1])
-                    text_formatted1 =  f'Change ({delta_days} day{"s" if delta_days > 1 else ""}):' 
-                    epa_pct_ax.text(0.5, 0.7, text_formatted1, ha='center', va='center', fontsize='large')
-                    epa_pct_ax.text(0.5, 0.3, epa_pct_chg, ha='center', va='center', fontsize='large', color=epa_pct_color, weight='bold')
-                elif len(single_pond_data) == 3:
-                    epa_pct_chg1, delta_days1, epa_pct_color1 = calc_epa_pct_chg(single_pond_data[0], single_pond_data[1])
-                    epa_pct_chg2, delta_days2, epa_pct_color2 = calc_epa_pct_chg(single_pond_data[0], single_pond_data[2])
-                    text_formatted1 =  f'Change ({delta_days1} day{"s" if delta_days1 > 1 else ""}, {delta_days2} days):'
-                    epa_pct_ax.text(0.5, 0.7, text_formatted1, ha='center', va='center', fontsize='large')
-                    epa_pct_ax.text(0.3, 0.3, epa_pct_chg1, ha='center', va='center', fontsize='large', color=epa_pct_color1, weight='bold')
-                    epa_pct_ax.text(0.7, 0.3, epa_pct_chg2, ha='center', va='center', fontsize='large', color=epa_pct_color2, weight='bold')
-                else: # if there is only one data point so no percentage change
-                    epa_pct_ax.text(0.5, 0.7, 'Change:', ha='center', va='center', fontsize='large')
-                    epa_pct_ax.text(0.5, 0.3, 'n/a', ha='center', va='center', fontsize='large')
             
-            else: # when there is no data for this pond
-                epa_pct_fill = 'whitesmoke'
+            if pond_active:
+                # set fill color based on latest EPA reading
+                if len(single_pond_data) > 0:
+                    # set lastest_epa_data as the first value in single_pond_data (which should be reverse sorted)
+                    latest_epa_data = single_pond_data[0][1] 
+                    fill_color_dict = {(0,0.0199999999):'red', 
+                                       (0.02,0.0349999999): 'yellow',
+                                       (0.035,99999999999): 'mediumspringgreen'}
+                    for idx, (key, val) in enumerate(fill_color_dict.items()):
+                        if latest_epa_data >= key[0] and latest_epa_data < key[1]:
+                            fill_color = val 
+                else:
+                    # set fill color as light grey if there is no EPA data for the pond
+                    fill_color = 'lightgrey'
 
+                if len(single_pond_data) > 0:
+                    # set the center-point of each data point on the subplot, depending on number of data points available
+                    if len(single_pond_data) == 1:
+                        text_x = [0.5]
+                    elif len(single_pond_data) == 2:
+                        text_x = [0.3, 0.7]
+                    else:
+                        text_x = [0.195, 0.5, 0.805]
+
+                    for idx, item in enumerate(single_pond_data):
+                        text_date_formatted =  item[0].strftime("%-m/%-d/%y")
+                        epa_ax.text(text_x[idx], 0.7, text_date_formatted, ha='center', va='center')
+                        text_epa_data_formatted =  f'{item[1]*100: .2f}%'
+                        epa_ax.text(text_x[idx], 0.3, text_epa_data_formatted, ha='center', va='center', fontsize='large', weight='bold')
+                else:
+                    epa_ax.text(0.5, 0.5, 'Active but no data', ha='center', va='center')
+            else: # if pond is inactive
+                fill_color = 'whitesmoke'
+                epa_ax.text(0.5, 0.5, 'Inactive', ha='center', va='center')
+            
+            subplot_ax_format(epa_ax, fill_color)
+            
+            # epa change subplot
+            epa_pct_ax = plt.Subplot(fig, inner_plot[3:,:])
+            
+            if pond_active:
+            # Get the % change in EPA values if there is >1 entry (use the first and last indexes of the single_pond_data list)
+                if len(single_pond_data) != 0:
+                    epa_pct_fill = 'xkcd:light grey'    
+
+                    def calc_epa_pct_chg(data_curr: list, data_prev: list):
+                        '''
+                        inputs:
+                            data_curr: [datetime value, epa float value]
+                            data_prev: [datetime value, epa float value]
+
+                        output:
+                            pct_chg: calculated absolute change in percentage rounded to 2 decimal places and formatted with % character (str)
+                            delta_days: number of days between readings (int)
+                            pct_format_color: color for displaying percentage (str)
+                        '''
+                        delta_days = (data_curr[0] - data_prev[0]).days    
+
+                        pct_chg = (data_curr[1] - data_prev[1]) * 100
+                        if pct_chg > 0:
+                            pct_format_color = 'xkcd:emerald green'
+                            pct_chg = f'+{pct_chg:.2f}%'
+                        elif pct_chg < 0: 
+                            pct_format_color = 'xkcd:fire engine red'
+                            pct_chg = f'{pct_chg:.2f}%'
+                        else:
+                            pct_format_color = 'black'
+                            pct_chg = f'{pct_chg:.2f}%'
+                        return [pct_chg, delta_days, pct_format_color]
+                        # else:
+                        #     return ['n/a', delta_days, 'black']
+
+                    if len(single_pond_data) == 2:
+                        epa_pct_chg, delta_days, epa_pct_color = calc_epa_pct_chg(single_pond_data[0], single_pond_data[1])
+                        text_formatted1 =  f'Change ({delta_days} day{"s" if delta_days > 1 else ""}):' 
+                        epa_pct_ax.text(0.5, 0.7, text_formatted1, ha='center', va='center', fontsize='large')
+                        epa_pct_ax.text(0.5, 0.3, epa_pct_chg, ha='center', va='center', fontsize='large', color=epa_pct_color, weight='bold')
+                    elif len(single_pond_data) == 3:
+                        epa_pct_chg1, delta_days1, epa_pct_color1 = calc_epa_pct_chg(single_pond_data[0], single_pond_data[1])
+                        epa_pct_chg2, delta_days2, epa_pct_color2 = calc_epa_pct_chg(single_pond_data[0], single_pond_data[2])
+                        text_formatted1 =  f'Change ({delta_days1} day{"s" if delta_days1 > 1 else ""}, {delta_days2} days):'
+                        epa_pct_ax.text(0.5, 0.7, text_formatted1, ha='center', va='center', fontsize='large')
+                        epa_pct_ax.text(0.3, 0.3, epa_pct_chg1, ha='center', va='center', fontsize='large', color=epa_pct_color1, weight='bold')
+                        epa_pct_ax.text(0.7, 0.3, epa_pct_chg2, ha='center', va='center', fontsize='large', color=epa_pct_color2, weight='bold')
+                    else: # if there is only one data point so no percentage change
+                        epa_pct_ax.text(0.5, 0.7, 'Change:', ha='center', va='center', fontsize='large')
+                        epa_pct_ax.text(0.5, 0.3, 'n/a', ha='center', va='center', fontsize='large')
+
+                else: # when there is no data for this pond
+                    epa_pct_fill = 'lightgrey'
+
+            else: # if pond is inactive
+                epa_pct_fill = 'whitesmoke'
+                
             subplot_ax_format(epa_pct_ax, epa_pct_fill) 
 
         ##############################
