@@ -3,9 +3,6 @@
 *.ipynb
 *__pycache__
 prod/
-data_sources/
-output_files/
-settings/
 venv/
 dev_notebooks/
 .ipynb_checkpoints/

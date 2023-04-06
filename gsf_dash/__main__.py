@@ -18,8 +18,12 @@ def main(argv):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("-d","--date", required=True, help="Date to generate report for in 'yyyy-mm-dd' format; year must be from 2020 to 2023")
+    parser.add_argument("-t","--test_run", type=bool, default=False, help="OPTIONAL: set to True to run as a test to send to alternate email")
     #parser.add_argument("-t", "--target_density", type=float, default=0.4, help="OPTIONAL: target density of AFDW (Default = 0.40)")
     args = parser.parse_args()
+    
+    if args.test_run:
+        print('RUNNING AS TEST')
     
     # check if date argument is valid, use try/except clause with datetime.strptime because it will generate an error with invalid date
     try:
@@ -53,7 +57,12 @@ def main(argv):
         failure_notify_email_exit(f'Error running pond overview script', tb)
         
     print('Emailing message with attachment...')
-    email_msg_info = load_setting('email_msg')
+    
+    if args.test_run == False:
+        email_msg_info = load_setting('email_msg')
+    else:
+        email_msg_info = load_setting('test_msg')
+        
     send_email(recipients = [x.strip() for x in email_msg_info['recipients'].split(',')], 
                # split recipients on ',' and remove whitespace because ConfigParser imports as a single string, but needs to be a list of each email string 
                 subject = f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}', # add date to the end of the email subject
