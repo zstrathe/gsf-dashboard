@@ -7,7 +7,7 @@ cd $SCRIPT_DIR; cd ../
 echo "Running Python script"
 source venv/bin/activate
 script_date_str=`date +%Y-%m-%d`
-python_output=$(python3 generate_overview.py -i "data_sources/epa_data.xlsx" -d $script_date_str 2>&1)
+python_output=$(python3 -m prod.run -d $script_date_str 2>&1)
 python_exec_code=$?
 echo "$python_output"
 if [[ $python_exec_code -eq 0 ]]; then
