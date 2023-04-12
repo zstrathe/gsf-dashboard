@@ -1,5 +1,6 @@
 import pandas as pd
 import warnings
+import math
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.simplefilter(action='ignore', category=UserWarning)
 import matplotlib.pyplot as plt
@@ -7,50 +8,47 @@ import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse, Rectangle
 
 class PondsOverviewPlot:
-    def __init__(self, select_date, scorecard_dataframe, epa_data_dict, ponds_active_dict):
+    def __init__(self, select_date, scorecard_dataframe, epa_data_dict, ponds_active_dict, save_output=True):
         select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
-        # self.ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
-        #                   '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
-        #                   '0103', '0203', '0303', '0403', '0503', '0603', '0703', '0803', '0903', '1003', '1103', '1203',
-        #                   '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
-        #                   '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
-        #                   '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
-        # scorecard_datafile = self.download_data('scorecard_data_info')
-        # scorecard_dataframe = self.load_scorecard_data(scorecard_datafile)
-        # epa_datafile = self.download_data('epa_data_info')
-        # epa_data_dict = self.load_epa_data(epa_datafile, select_date)
-        # self.epa_data_dict_old = self.load_epa_data_old('./data_sources/epa_data_old.xlsx')
-        # self.num_active_ponds = 0 
-        # self.num_active_ponds_sm = 0 
-        # self.num_active_ponds_lg = 0
-        # self.ponds_active_status = {key:self.check_active(pond_scorecard_data=scorecard_dataframe, select_date=select_date, pond_name=key, num_days_prior=5) for key in self.ponds_list}
-        self.out_filename = self.plot_scorecard(ponds_data=scorecard_dataframe, select_date=select_date, ponds_active_dict=ponds_active_dict, epa_data=epa_data_dict)
+        self.overview_out_filename = None # initialize output filename, regardless of whether output will be saved
+        self.suggested_harvests_dict = None
+        self.suggested_harvests_out_filename = None
+        self.plot_scorecard(ponds_data=scorecard_dataframe, select_date=select_date, ponds_active_dict=ponds_active_dict, epa_data=epa_data_dict, save_output=save_output)
+        self.plot_suggested_harvests(self.suggested_harvests_dict, select_date=select_date, save_output=save_output)
     
     def plot_scorecard(self, ponds_data, select_date, ponds_active_dict, epa_data=None, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, save_output=True, plot_title='Pond Health Overview'): 
-        print('Plotting pond overview...')
+        print('Plotting ponds overview...')
+    
         # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
         select_date = pd.to_datetime(select_date).normalize()
         
         # Initialize variables for aggregations
         total_mass_all = 0 # total mass for entire farm (regardless of density)
         total_harvestable_mass = 0 # all available mass with afdw > target_to_density
-        target_harvest_mass = 0 # all harvestable mass with resulting afdw > target_to_density but only ponds with current afdw > harvest_density
-        target_harvest_gals = 0 # target_harvest_mass in terms of volume in gallons
-        suggested_harvests = {} # dict to store calculated harvest depths for ponds with density >= harvest_density
+        potential_total_harvest_mass = 0 # all harvestable mass with resulting afdw > target_to_density but only ponds with current afdw > harvest_density
+        potential_total_harvest_gals = 0 # potential harvest_mass in terms of volume in gallons
+        suggested_harvests = {'columns': [], 'data': {}, 'aggregates': {}} # dict to store calculated harvest depths for ponds with density >= harvest_density
         num_active_ponds = 0 # number of active ponds (defined by the plot_ponds().check_active() function)
         num_active_ponds_sm = 0 # number of active 1.1 acre ponds
         num_active_ponds_lg = 0 # number of active 2.2 acre ponds
         
+        any_noncurrent_flag = False # flag to indicate when noncurrent AFDW or Depth data is being used, to add a note on plot explaining the notation 
+        
         # helper function to query data from previous days, if it is not available for current day
-        def current_or_prev_query(df, col_name, num_prev_days, return_prev_day_num=False):
+        def current_or_prev_query(df, col_name, num_prev_days, return_noncurrent_flag=False):
                     for day_num in range(0,num_prev_days+1):
                         data = df[col_name].shift(day_num).fillna(0).loc[select_date] # use fillna(0) to force missing data as 0
                         if data > 0:
-                            if return_prev_day_num == True:
-                                return data, day_num
+                            if return_noncurrent_flag and day_num == 0:
+                                return data, 'current' # return second value as 'current' to indicate data is current 
+                            elif return_noncurrent_flag and day_num > 0:
+                                return data, 'noncurrent' # return second value as 'non-current' to indicate data is not current (not from the current report day)
                             else:
                                 return data
-                    return 0 # return 0 if no data found (though 'data' variable will be 0 anyway due to fillna(0) method used) 
+                    if return_noncurrent_flag:
+                        return 0, 'n/a'
+                    else:
+                        return 0 # return 0 if no data found (though 'data' variable will be 0 anyway due to fillna(0) method used) 
                 
         # helper function to query single data points from each pond dataframe
 #         def data_query(pond_data, pond_name, query_name):
@@ -174,7 +172,7 @@ class PondsOverviewPlot:
         
         # function to plot each pond to ensure that data for each plot is kept within a local scope
         def plot_each_pond(ponds_data, fig, pond_plot, pond_name, select_date):
-            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=-0.01, hspace=-0.01)
+            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=-0.01, hspace=-0.01) # each individual plot (from gridspec) is divided into subplots with 5 rows and 3 columns
 
             # Check prior 5 days of data to see if pond is active/in-use
             nonlocal ponds_active_dict
@@ -186,9 +184,18 @@ class PondsOverviewPlot:
             except:
                 pond_data_error = True
             
-            # Gather data for pond if it's active
+            # Get the last harvest date for each pond, done separately from other data queries due to needing full range of dates, and regardless of whether it's active
+            # the date found is relative to the select_date parameter (so reports can always be generated relative to a specific date even for past dates)
+            try:
+                last_harvest_idx = single_pond_data['Split Innoculum'].loc[:select_date].last_valid_index()
+                pond_last_harvest_str = last_harvest_idx.date().strftime('%-m-%-d-%y')
+                pond_days_since_harvest = (select_date - last_harvest_idx).days 
+            except:
+                last_harvest_idx = 'n/a'
+                pond_last_harvest_str = 'n/a'
+            
+            # Gather current data for pond if it's active
             if pond_active == True:
-                
                 # update aggregations for number of active ponds
                 nonlocal num_active_ponds, num_active_ponds_sm, num_active_ponds_lg
                 #check if pond is in the '06' or '08' column by checking the last values in name
@@ -198,19 +205,26 @@ class PondsOverviewPlot:
                     num_active_ponds_sm += 1
                 num_active_ponds += 1
                 
-                date_single_pond_data = single_pond_data.loc[select_date] # get dataframe for individual pond
+                # get dataframe for individual pond for current date
+                date_single_pond_data = single_pond_data.loc[select_date] 
                 
                 # calculate data for pond subplot display
-                pond_data_afdw = single_pond_data.loc[select_date]['AFDW (filter)']
-                pond_data_afdw = [0 if pd.isna(pond_data_afdw) else pond_data_afdw][0] # set to 0 if na value (i.e., nothing entered at all)
-                pond_data_depth = single_pond_data.loc[select_date]['Depth']
-                pond_data_depth = [0 if pd.isna(pond_data_depth) else pond_data_depth][0] # set to 0 if na value
+                pond_data_afdw, pond_data_afdw_noncurrent_flag = current_or_prev_query(single_pond_data, 'AFDW (filter)', 1, return_noncurrent_flag=True)
+                pond_data_depth, pond_data_depth_noncurrent_flag = current_or_prev_query(single_pond_data, 'Depth', 1, return_noncurrent_flag=True)
+                pond_data_depth = math.floor(pond_data_depth*8)/8 # round depth to nearest 1/8 inches (data should already be input this way, but this ensures that data entry errors are corrected)
+                # update 'any_noncurrent_flag' var to True if either AFDW or Depth is flagged as noncurrent, for use with adding explanation note to the plot when this flag is true
+                if pond_data_afdw_noncurrent_flag == 'noncurrent' or pond_data_depth_noncurrent_flag == 'noncurrent': 
+                    nonlocal any_noncurrent_flag
+                    any_noncurrent_flag = True
                 if (pond_data_afdw == 0 or pond_data_depth == 0) != True:
                     pond_data_total_mass = int(afdw_depth_to_mass(pond_data_afdw, pond_data_depth, pond_name))
                     # calculate harvestable depth (in inches) based on depth and afdw and the target_topoff_depth & target_to_density global function parameters
-                    pond_data_harvestable_depth = round(((pond_data_depth * pond_data_afdw) - (target_topoff_depth * target_to_density)) / pond_data_afdw,2)
+                    # rounding down to nearest 1/8 inch
+                    pond_data_harvestable_depth = math.floor((((pond_data_depth * pond_data_afdw) - (target_topoff_depth * target_to_density)) / pond_data_afdw)*8)/8
                     if pond_data_harvestable_depth < 0: 
                         pond_data_harvestable_depth = 0
+                    # calculate the depth to harvest pond to (i.e., the resulting depth after it has been harvested with the pond_data_harvestable_depth number of inches)   
+                    pond_data_target_depth_harvest_to = pond_data_depth - pond_data_harvestable_depth
                     # calculate harvestable volume (in gallons) based on harvestable depth and conversion factor (35,000) to gallons. Double for the '06' and '08' column ponds since they are double size
                     pond_data_harvestable_gallons = pond_data_harvestable_depth * 35000
                     if pond_name[-2:] == '06' or pond_name[-2:] == '08':
@@ -220,13 +234,22 @@ class PondsOverviewPlot:
                     # Add pond info to global counters/data for the entire farm
                     nonlocal total_mass_all
                     total_mass_all += pond_data_total_mass # add pond mass to the total_mass_all counter for entire farm
-                    if pond_data_afdw > harvest_density: # add these only if current pond density is greater than the global function parameter 'harvest_density'
-                        nonlocal suggested_harvests
-                        nonlocal target_harvest_mass
-                        nonlocal target_harvest_gals
-                        suggested_harvests[pond_name] = round(pond_data_harvestable_depth,2)
-                        target_harvest_mass += pond_data_harvestable_mass
-                        target_harvest_gals += pond_data_harvestable_gallons
+                    if pond_data_afdw > harvest_density and pond_data_harvestable_depth > 0: # add these only if current pond density is greater than the global function parameter 'harvest_density'
+                        nonlocal suggested_harvests, potential_total_harvest_mass, potential_total_harvest_gals
+                        pond_column = pond_name[2:]
+                        suggested_harvests['data'].setdefault(pond_column, []) # use .setdefault methods to first populate dict key for column (if it doesn't already exist), and an empty list to collect data for each
+                        tmp_dict = {}
+                        tmp_dict['Pond'] = pond_name
+                        tmp_dict['Harvest To'] = pond_data_target_depth_harvest_to
+                        tmp_dict['Days Since Harvested'] = pond_days_since_harvest
+                        tmp_dict['Harvestable Depth'] = pond_data_harvestable_depth 
+                        tmp_dict['Harvestable Gallons'] = pond_data_harvestable_gallons
+                        tmp_dict['Harvestable Mass'] = pond_data_harvestable_mass
+                        suggested_harvests['data'][pond_column].append(tmp_dict)
+                        
+                        # update total potential harvest amounts
+                        potential_total_harvest_mass += pond_data_harvestable_mass
+                        potential_total_harvest_gals += pond_data_harvestable_gallons
                 else:
                     pond_data_total_mass = 0
                     pond_data_harvestable_depth = 0
@@ -297,18 +320,10 @@ class PondsOverviewPlot:
                         elif color_idx > 1 and epa_val < 3.0:
                             fill_color = 'yellow'
                 
-            # Get the last harvest date for each pond, done separately from other data queries due to needing full range of dates, and regardless of whether it's active
-            # Get the date relative to the select_date parameter (so reports can always be generated relative to a specific date even for past dates)
-            try:
-                last_harvest_idx = single_pond_data['Split Innoculum'].loc[:select_date].last_valid_index()
-                pond_last_harvest_str = last_harvest_idx.date().strftime('%-m-%-d-%y')
-            except:
-                last_harvest_idx = 'n/a'
-                pond_last_harvest_str = 'n/a'
-                
             ## Calculate growth rates since last harvest / and 5-day   
             ## TODO: Reformulate to calculate based on average of each daily change (currently just checking difference between two values and dividing by # days)
-            if last_harvest_idx != 'n/a':    
+            ## TODO: show number of days since last harvest with the growth rate?
+            if last_harvest_idx != 'n/a':   
                 new_growth_start_idx = last_harvest_idx + pd.Timedelta(days=1)
                 if pond_active == True:       
                         if new_growth_start_idx < select_date: # i.e., if pond has more than 1 day of growth
@@ -330,7 +345,7 @@ class PondsOverviewPlot:
                             num_growth_days = (pond_growth_df.index[-1] - pond_growth_df.index[0]).days
                             
                             # calculate growth rates
-                            # assume last harvest date is not valid if growing days are more than 9
+                            # assume last harvest date is not valid if growing days are more than 90
                             # also don't calculate if there are 0 growing days (AKA 0 days of data since last harvest/split)
                             if num_growth_days > 90 or num_growth_days == 0: 
                                 daily_growth_rate_since_harvest = 'n/a'
@@ -413,23 +428,28 @@ class PondsOverviewPlot:
                 if pond_data_depth == 0:
                     pond_data_depth = 'No data'
                 else:    
-                    pond_data_depth = f'{round(pond_data_depth,2)}"'
+                    pond_data_depth = f'{"**" if pond_data_depth_noncurrent_flag == "noncurrent" else ""}{pond_data_depth}"' # print two asterisks before if data was flagged as 'non-current'
+                
                 if pond_data_afdw == 0:
                     pond_data_afdw = 'No data'
                 else:
-                    pond_data_afdw = round(pond_data_afdw,3)
+                    pond_data_afdw = f'{"**" if pond_data_afdw_noncurrent_flag == "noncurrent" else ""}{round(pond_data_afdw,3)}' # print two asterisks before if data was flagged as 'non-current'
+                
                 if pond_data_harvestable_mass == 0:
                     pond_data_harvestable_mass = '-'
                 else:
                     pond_data_harvestable_mass = f'{pond_data_harvestable_mass} kg' 
+                
                 if pond_data_harvestable_depth == 0:
                     pond_data_harvestable_depth = '-'
                 else:
-                    pond_data_harvestable_depth = f'{round(pond_data_harvestable_depth,2)}"'
+                    pond_data_harvestable_depth = f'{pond_data_harvestable_depth}"'
+                
                 if daily_growth_rate_since_harvest == 'n/a':
                     pass # don't need to reformat in this case
                 else:
                     daily_growth_rate_since_harvest = f'{daily_growth_rate_since_harvest} kg/day'
+                
                 if daily_growth_rate_5_days == 'n/a':
                     pass # don't need to reformat in this case
                 else: 
@@ -516,8 +536,6 @@ class PondsOverviewPlot:
         #title_date = '/'.join([select_date.split('-')[i].lstrip('0') for i in [1,2,0]])
         title_date = select_date.strftime('%-m/%-d/%Y')
         fig.suptitle(f'{plot_title}\n{title_date}', fontweight='bold', fontsize=16, y=0.905)
-        
-        total_available_to_harvest = 0 # keep track of total available for harvest across all ponds
             
         for idx_plot, pond_plot in enumerate(outer_plots):
             pond_name = flat_title_labels[idx_plot]
@@ -548,7 +566,7 @@ class PondsOverviewPlot:
                                '3-r': [0.9, 'right'],
                                '4-l': [0.94, 'left'],
                                '4-c': [1.05, 'center']}
-                    
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
                     plot_legend(legend_data, x_align, y_spacing=0.12)
                     
                 if 'BLANK 12-6' in pond_name: # plot the indicator legend in the first blank subplot in row 12                       
@@ -573,29 +591,17 @@ class PondsOverviewPlot:
                     
                     
                 elif 'BLANK 13-1' in pond_name:
+                    # add note for noncurrent AFDW or Depth data when they are being used
+                    if any_noncurrent_flag: 
+                        ax.text(0,0.95, "** indicates AFDW or Depth data that is not available for the current day, so using data from previous day", ha='left', va='center', fontsize='small')
+                    
                     print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
                                     + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{num_active_ponds_sm}\n'
                                     + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{num_active_ponds_lg}\n'
                                    + r'$\bf{Total\/\/mass\/\/(all\/\/ponds):}$' + f'{total_mass_all:,} kg')
                     t = ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
-                elif 'BLANK 13-3' in pond_name:
-                    # sort the suggested_harvests dict by the pond column first (last 2 digits of name)
-                    suggested_harvests = dict(sorted(suggested_harvests.items(), key=lambda item: item[0][-2:]))
-                    # generate a formatted string for displaying
-                    print_string = (r'$\bf{Suggested\/\/Harvest\/\/Depths}$' +  
-                                    '\n(ponds with' + r'$\geq$' + f'{harvest_density} AFDW, with estimated harvest depth to reach {target_to_density:.1f}' + 
-                                    f' AFDW with top off to {target_topoff_depth}"):\n')
-                    for idx, (key, value) in enumerate(suggested_harvests.items()):
-                        print_string += r'$\bf{' + str(key) + '}$' + ": " + f'{value:.2f}"' 
-                        if (idx+1) % 6 == 0:
-                            print_string += "\n"
-                        elif (idx+1) != len(suggested_harvests):
-                            print_string += "  |  "
-                    if print_string[-1] != '\n': # check if last portion ended with newline char, append one if not
-                        print_string += '\n'
-                    print_string +=  r'$\bf{Suggested\/\/harvest\/\/mass:} $' + f'{target_harvest_mass:,} kg'
-                    print_string += '\n' + r'$\bf{Suggested\/\/harvest\/\/volume:} $' + f'{target_harvest_gals:,.0f} gallons'
-                    t = ax.text(-0.75,0.75, print_string, ha='left', va='top', fontsize=14, multialignment='left')               
+               # elif 'BLANK 13-3' in pond_name:
+                      
                 # elif 'BLANK 14-1' in pond_name:
                     # print_string = (r'$\bf{Harvest\/\/Depth} =$' + '\n' + r'$\frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
                     #                 '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
@@ -610,8 +616,72 @@ class PondsOverviewPlot:
                 
                 fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
         
-        out_filename = f'./output_files/{plot_title} {select_date.strftime("%Y-%m-%d")}.pdf'
+        # Update Suggested Harvests data
+        # first sort suggested_harvests by column, then within each column (1, 2, 3, 4, 6, 8 if any ponds are active in them), by 'days since harvested' then 'harvestable mass', both in descending order
+        suggested_harvests['data'] = dict(sorted(suggested_harvests['data'].items(), key=lambda x: x[0]))
+        for idx, col in enumerate(suggested_harvests['data'].keys()):
+            suggested_harvests['data'][col] = sorted(suggested_harvests['data'][col], key=lambda x: (x['Days Since Harvested'], x['Harvestable Mass']), reverse=True)                                                                                                                                                                                                                                                                                                       
+            # add cumulative totals to each pond now that they are sorted
+            tmp_gals = 0
+            tmp_mass = 0
+            for pond in suggested_harvests['data'][col]:
+                tmp_gals += pond['Harvestable Gallons']
+                tmp_mass += pond['Harvestable Mass']
+                pond['Running Total Gallons'] = f'{tmp_gals:,.0f} gal'
+                pond['Running Total Mass'] = f'{tmp_mass:,} kg'
+
+                # update formatting of suggested_harvests to display
+                pond['Harvest To'] = f'{pond["Harvest To"]}"'
+                pond['Days Since Harvested'] = f'{pond["Days Since Harvested"]} day{"s" if pond["Days Since Harvested"] != 1 else ""}'
+                pond['Harvestable Depth'] = f'{pond["Harvestable Depth"]}"' # set dict values normally since keys should now exist
+                pond['Harvestable Gallons'] = f'{pond["Harvestable Gallons"]:,.0f} gal'
+                pond['Harvestable Mass'] = f'{pond["Harvestable Mass"]:,} kg'
+        
+        # add 'columns' values to suggested_harvests dict, get list of keys from the first pond in 'data'
+        suggested_harvests['columns'] = list(suggested_harvests['data'][list(suggested_harvests['data'].keys())[0]][0].keys())
+        # add 'aggregates' to suggested_harvests dict
+        suggested_harvests['aggregates'] = {'potential total mass': f'{potential_total_harvest_mass:,} kg', 'potential total volume': f'{potential_total_harvest_gals:,.0f} gallons'}
+         
+        self.suggested_harvests_dict = suggested_harvests # save suggested_harvests as class variable to be available to plot_suggested_harvests function
+
         if save_output == True:
+            out_filename = f'./output_files/{plot_title} {select_date.strftime("%Y-%m-%d")}.pdf'
             plt.savefig(out_filename, bbox_inches='tight')
-        fig.show() 
-        return out_filename
+            self.overview_out_filename = out_filename
+
+    def plot_suggested_harvests(self, suggested_harvests_dict, select_date, save_output=True):
+        # plot data tables with subplots
+        # Initialize plot
+        plt_width = 8.5
+        plt_height = 11
+        scale_factor = 2
+
+        fig, axs = plt.subplots(nrows=6, ncols=1, figsize=(plt_width*scale_factor, plt_height*scale_factor))
+        title_text = (r'$\bf{Suggested\/\/Harvest\/\/Depths}$' +  
+                     '\nponds with' + r'$\geq$' + f'0.50 AFDW, with estimated harvest depth to reach 0.40 AFDW after top off to 13"\n\n'+
+                      f'Total potential harvest mass: {suggested_harvests_dict["aggregates"]["potential total mass"]}\n' +
+                      f'Total potential harvest volume: {suggested_harvests_dict["aggregates"]["potential total volume"]}\n')
+
+        fig.suptitle(title_text, fontsize=12, y = 0.98)
+
+        for idx, ax in enumerate(fig.axes):
+            try:
+                key = list(suggested_harvests_dict['data'].keys())[idx]
+                ax.set_title(f'Column {key}', weight='bold')
+                df = pd.DataFrame(suggested_harvests_dict['data'][key], columns=suggested_harvests_dict['columns'])
+                t = ax.table(cellText=df.values, colLabels=df.columns, loc='upper center', cellLoc='center')
+                t.auto_set_font_size(False)
+                t.set_fontsize(8)
+                t.scale(1.5, 1.5) 
+            except:
+                pass
+            ax.axis('off')
+            ax.axis('tight')
+
+        fig.tight_layout(pad=1.5)
+        
+        if save_output:
+            out_filename = f'./output_files/Suggested Harvests {select_date.strftime("%Y-%m-%d")}.pdf'
+            plt.savefig(out_filename, bbox_inches='tight')
+            self.suggested_harvests_out_filename = out_filename
+        
