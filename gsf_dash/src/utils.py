@@ -28,11 +28,13 @@ def send_email(recipients, subject, msg_body, attachments=[]):
     message.send()
     print('Email successfully sent!')
 
-def generate_multipage_pdf(fig_list, pdf_filename):
+def generate_multipage_pdf(fig_list, pdf_filename, add_pagenum=True, bbox_inches='tight'):
     with PdfPages(pdf_filename) as pdf:
-        for fig in fig_list:
+        for idx, fig in enumerate(fig_list, start=1):
             plt.figure(fig)
-            pdf.savefig(bbox_inches='tight')  # saves the current figure into a pdf page
+            if add_pagenum:
+                fig.text(0.5, 0.0275, f'Page {idx} of {len(fig_list)}', ha='center', va='bottom', fontsize='small') 
+            pdf.savefig(bbox_inches=bbox_inches)  # saves the current figure into a pdf page
             plt.close()
     return pdf_filename
         

@@ -7,6 +7,7 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse, Rectangle
+from . import generate_multipage_pdf
 
 class PondsOverviewPlots:
     def __init__(self, select_date, scorecard_dataframe, epa_data_dict, ponds_active_dict, save_output=True):
@@ -15,10 +16,9 @@ class PondsOverviewPlots:
         self.ponds_active_dict = ponds_active_dict
         self.save_output = save_output
         self.epa_data_dict = epa_data_dict
-        self.suggested_harvests_dict = None # initialize suggested_harvests_dict, will be populated by self.plot_scorecard()
-        self.overview_out_filename = self.plot_scorecard()
-        self.suggested_harvests_out_filename = self.plot_suggested_harvests()
-        self.epa_overview_out_filename = self.plot_epa()
+        self.potential_harvests_dict = None # initialize potential_harvests_dict, will be populated by self.plot_scorecard()
+        self.output_filenames = [] # initialize a list to collect output filenames
+        [self.output_filenames.append(x) for x in (self.plot_scorecard(), self.plot_potential_harvests(), self.plot_epa())]
         
     def plot_scorecard(self, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, plot_title='Pond Health Overview'): 
         print('Plotting ponds overview...')
@@ -30,7 +30,7 @@ class PondsOverviewPlots:
         total_harvestable_mass = 0 # all available mass with afdw > target_to_density
         potential_total_harvest_mass = 0 # all harvestable mass with resulting afdw > target_to_density but only ponds with current afdw > harvest_density
         potential_total_harvest_gals = 0 # potential harvest_mass in terms of volume in gallons
-        suggested_harvests = {'columns': [], 'data': {}, 'aggregates': {}} # dict to store calculated harvest depths for ponds with density >= harvest_density
+        potential_harvests = {'columns': [], 'data': {}, 'aggregates': {}} # dict to store calculated harvest depths for ponds with density >= harvest_density
         num_active_ponds = 0 # number of active ponds (defined by the plot_ponds().check_active() function)
         num_active_ponds_sm = 0 # number of active 1.1 acre ponds
         num_active_ponds_lg = 0 # number of active 2.2 acre ponds
@@ -238,17 +238,17 @@ class PondsOverviewPlots:
                     nonlocal total_mass_all
                     total_mass_all += pond_data_total_mass # add pond mass to the total_mass_all counter for entire farm
                     if pond_data_afdw > harvest_density and pond_data_harvestable_depth > 0: # add these only if current pond density is greater than the global function parameter 'harvest_density'
-                        nonlocal suggested_harvests, potential_total_harvest_mass, potential_total_harvest_gals
+                        nonlocal potential_harvests, potential_total_harvest_mass, potential_total_harvest_gals
                         pond_column = pond_name[2:]
-                        suggested_harvests['data'].setdefault(pond_column, []) # use .setdefault methods to first populate dict key for column (if it doesn't already exist), and an empty list to collect data for each
+                        potential_harvests['data'].setdefault(pond_column, []) # use .setdefault methods to first populate dict key for column (if it doesn't already exist), and an empty list to collect data for each
                         tmp_dict = {}
-                        tmp_dict['Pond'] = pond_name
-                        tmp_dict['Harvest To'] = pond_data_target_depth_harvest_to
+                        tmp_dict['Pond Number'] = pond_name
+                        tmp_dict['Drop To'] = pond_data_target_depth_harvest_to
                         tmp_dict['Days Since Harvested'] = pond_days_since_harvest
                         tmp_dict['Harvestable Depth'] = pond_data_harvestable_depth 
                         tmp_dict['Harvestable Gallons'] = pond_data_harvestable_gallons
                         tmp_dict['Harvestable Mass'] = pond_data_harvestable_mass
-                        suggested_harvests['data'][pond_column].append(tmp_dict)
+                        potential_harvests['data'][pond_column].append(tmp_dict)
                         
                         # update total potential harvest amounts
                         potential_total_harvest_mass += pond_data_harvestable_mass
@@ -598,7 +598,7 @@ class PondsOverviewPlots:
                     print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{num_active_ponds}\n' 
                                     + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{num_active_ponds_sm}\n'
                                     + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{num_active_ponds_lg}\n'
-                                   + r'$\bf{Total\/\/mass\/\/(all\/\/ponds):}$' + f'{total_mass_all:,} kg')
+                                   + r'$\bf{Calculated\/\/total\/\/mass:}$' + f'{total_mass_all:,} kg')
                     t = ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
                # elif 'BLANK 13-3' in pond_name:
                       
@@ -617,76 +617,132 @@ class PondsOverviewPlots:
                 fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
         
         # Update Suggested Harvests data
-        # first sort suggested_harvests by column, then within each column (1, 2, 3, 4, 6, 8 if any ponds are active in them), by 'days since harvested' then 'harvestable mass', both in descending order
-        suggested_harvests['data'] = dict(sorted(suggested_harvests['data'].items(), key=lambda x: x[0]))
-        for idx, col in enumerate(suggested_harvests['data'].keys()):
-            suggested_harvests['data'][col] = sorted(suggested_harvests['data'][col], key=lambda x: (x['Days Since Harvested'], x['Harvestable Mass']), reverse=True)                                                                                                                                                                                                                                                                                                       
+        # first sort potential_harvests by column, then within each column (1, 2, 3, 4, 6, 8 if any ponds are active in them), by 'days since harvested' then 'harvestable mass', both in descending order
+        potential_harvests['data'] = dict(sorted(potential_harvests['data'].items(), key=lambda x: x[0]))
+        for idx, col in enumerate(potential_harvests['data'].keys()):
+            potential_harvests['data'][col] = sorted(potential_harvests['data'][col], key=lambda x: (x['Days Since Harvested'], x['Harvestable Mass']), reverse=True)                                                                                                                                                                                                                                                                                                       
             # add cumulative totals to each pond now that they are sorted
             tmp_gals = 0
             tmp_mass = 0
-            for pond in suggested_harvests['data'][col]:
+            for pond in potential_harvests['data'][col]:
                 tmp_gals += pond['Harvestable Gallons']
                 tmp_mass += pond['Harvestable Mass']
                 pond['Running Total Gallons'] = f'{tmp_gals:,.0f} gal'
                 pond['Running Total Mass'] = f'{tmp_mass:,} kg'
 
-                # update formatting of suggested_harvests to display
-                pond['Harvest To'] = f'{pond["Harvest To"]}"'
+                # update formatting of poatential_harvests to display
+                pond['Drop To'] = f'{pond["Drop To"]}"'
                 pond['Days Since Harvested'] = f'{pond["Days Since Harvested"]} day{"s" if pond["Days Since Harvested"] != 1 else ""}'
                 pond['Harvestable Depth'] = f'{pond["Harvestable Depth"]}"' # set dict values normally since keys should now exist
                 pond['Harvestable Gallons'] = f'{pond["Harvestable Gallons"]:,.0f} gal'
                 pond['Harvestable Mass'] = f'{pond["Harvestable Mass"]:,} kg'
         
-        # add 'columns' values to suggested_harvests dict, get list of keys from the first pond in 'data'
-        suggested_harvests['columns'] = list(suggested_harvests['data'][list(suggested_harvests['data'].keys())[0]][0].keys())
-        # add 'aggregates' to suggested_harvests dict
-        suggested_harvests['aggregates'] = {'potential total mass': f'{potential_total_harvest_mass:,} kg', 'potential total volume': f'{potential_total_harvest_gals:,.0f} gallons'}
+        # add 'columns' values to potential_harvests dict, get list of keys from the first pond in 'data'
+        potential_harvests['columns'] = list(potential_harvests['data'][list(potential_harvests['data'].keys())[0]][0].keys())
+        # add 'aggregates' to potential_harvests dict
+        potential_harvests['aggregates'] = {'potential total mass': f'{potential_total_harvest_mass:,} kg', 'potential total volume': f'{potential_total_harvest_gals:,.0f} gallons'}
          
-        self.suggested_harvests_dict = suggested_harvests # save suggested_harvests as class variable to be available to plot_suggested_harvests function
+        self.potential_harvests_dict = potential_harvests # save potential_harvests as class variable to be available to plot_potential_harvests function
 
         if self.save_output:
             out_filename = f'./output_files/{plot_title} {select_date.strftime("%Y-%m-%d")}.pdf'
             plt.savefig(out_filename, bbox_inches='tight')
             return out_filename
-
-    def plot_suggested_harvests(self):
-        suggested_harvests_dict = self.suggested_harvests_dict
+    
+    def plot_potential_harvests(self, overall_spacing=0.03): 
+        potential_harvests_dict = self.potential_harvests_dict
         select_date = self.select_date
         
-        # plot data tables with subplots
-        # Initialize plot
-        plt_width = 8.5
-        plt_height = 11
-        scale_factor = 2
-
-        fig, axs = plt.subplots(nrows=6, ncols=1, figsize=(plt_width*scale_factor, plt_height*scale_factor))
-        title_text = (r'$\bf{Suggested\/\/Harvest\/\/Depths - ' +  str(select_date.strftime("%-m/%-d/%Y")) + '}$'
-                     '\nponds with' + r'$\geq$' + f'0.50 AFDW, with estimated harvest depth to reach 0.40 AFDW after top off to 13"\n\n'+
-                      f'Total potential harvest mass: {suggested_harvests_dict["aggregates"]["potential total mass"]}\n' +
-                      f'Total potential harvest volume: {suggested_harvests_dict["aggregates"]["potential total volume"]}\n')
-
-        fig.suptitle(title_text, fontsize=12, y = 0.98)
-
-        for idx, ax in enumerate(fig.axes):
-            try:
-                key = list(suggested_harvests_dict['data'].keys())[idx]
-                ax.set_title(f'Column {key}', weight='bold')
-                df = pd.DataFrame(suggested_harvests_dict['data'][key], columns=suggested_harvests_dict['columns'])
-                t = ax.table(cellText=df.values, colLabels=df.columns, loc='upper center', cellLoc='center')
-                t.auto_set_font_size(False)
-                t.set_fontsize(8)
-                t.scale(1.5, 1.5) 
-            except:
-                pass
+        def gen_fig(title=False):
+            # Initialize plot
+            plt_width = 8.5
+            plt_height = 11
+            scale_factor = 1
+            fig, ax = plt.subplots(figsize=(plt_width*scale_factor, plt_height*scale_factor))
+            ax_border_pad = 0.5 # margin padding (in inches) between ax and full fig on all sides, just to maintain a margin for printing without needing to rescale, as well as room for header/footer info to be added (page numbers, etc.)
+            ax_width = (plt_width - ax_border_pad*2) / plt_width
+            ax_height = (plt_height - ax_border_pad*2) / plt_height 
+            ax_left_x = (1 - ax_width)/2
+            ax_bottom_y = (1 - ax_height)/2
+            ax.set_position([ax_left_x, ax_bottom_y, ax_width, ax_height]) # set ax to fill entire figure (except for the border padding)
             ax.axis('off')
-            ax.axis('tight')
+            #ax.yaxis.get_ticklocs(minor=True)
+            #ax.minorticks_on()
+            if title:
+                title_text1 = f'Potential Harvests - {str(select_date.strftime("%-m/%-d/%y"))}' 
+                title_text2 = ('\nponds with' + r'$\geq$' + f'0.50 AFDW, with estimated harvest depth to reach 0.40 AFDW after top off to 13"\n\n'+
+                              f'Total estimated potential harvest mass: {potential_harvests_dict["aggregates"]["potential total mass"]}\n' +
+                              f'Total estimated potential harvest volume: {potential_harvests_dict["aggregates"]["potential total volume"]}')
+                t1 = ax.text(0.5, 1, title_text1, ha='center', va='top', fontsize=14, weight='bold')
+                t2 = ax.text(0.5,0.992, title_text2, ha='center', va='top', fontsize=8)  
+                # get the y-coordinate where tables can begin plotting on figure (after title text, or at top of ax if title text isn't present: i.e., page 2+)
+                y0 = t2.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted()).y0 - overall_spacing
+            else:
+                y0 = 1
+            return fig, ax, y0
 
-        fig.tight_layout(pad=1.5)
-        
-        if self.save_output:
-            out_filename = f'./output_files/Suggested Harvests {select_date.strftime("%Y-%m-%d")}.pdf'
-            plt.savefig(out_filename, bbox_inches='tight')
-            return out_filename
+        def plot_table(table_title, ax, y_start, data_fontsize=6.4, title_fontsize=8):
+            table_title = ax.text(0.5, y_start, f'Column {table_title}', ha='center', va='top', fontsize=title_fontsize, weight='bold')
+            table_title_dims = table_title.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+
+            table_y_max = table_title_dims.y0 - 0.0025 # add 0.0025 spacing (in terms of ax y-coordinate) between the title and top of table
+
+            # plot a temporary table to get its dimensions, then remove it 
+            # need to do this so that tables can be plotted on a single ax with even vertical spacing between them
+            # the important dimension to capture here is the table height (after setting fontsize) because that will be variable depending on the length of the data, 
+            # and the 'bbox' parameter for a matplotlib table (to plot in an exact specified location) requires a lower y-bound value, which isn't possible without knowing its height relative to where the table should start
+            # (it would be more efficient to simply move this table, but that doesn't seem to be possible in matplotlib, so just removing and regenerating it instead once bounding box coordinates are calculated)
+            temp_table = ax.table(cellText=df.values, colLabels=df.columns, cellLoc='center')
+            temp_table.auto_set_font_size(False)
+            temp_table.set_fontsize(data_fontsize)
+            temp_table.auto_set_column_width(col=list(range(len(df.columns))))
+            temp_table_dims = temp_table.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+            temp_table.remove()
+
+            table = ax.table(cellText=df.values, colLabels=df.columns, cellLoc='center', colColours=['whitesmoke']*len(df.columns), bbox=[temp_table_dims.x0, table_y_max - temp_table_dims.height, temp_table_dims.width, temp_table_dims.height])
+            table.auto_set_font_size(False)
+            table.set_fontsize(data_fontsize)
+            table.auto_set_column_width(col=list(range(len(df.columns))))
+            table_dims = table.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+
+            # catch if the lower y-bound of the table is less than 0 (meaning it exceeded the ax size), if so then remove the plotted data and return signal to start a new page
+            if table_dims.y0 < 0: 
+                table_title.remove()
+                table.remove()
+                return 'start_new_page'     
+            else:
+                return table_dims.y0 # return the minimum/bottom y_coordinate value for the table
+
+        fig_list = [] # initialize list of figs (one for each output page, as necessary)
+        tables_list = list(potential_harvests_dict['data'].keys())
+
+        fig, ax, y_align = gen_fig(title=True)
+
+        table_spacing = 0.035
+
+        while tables_list:
+            table_title = tables_list.pop(0) # set 'table_title' equal to the key from data
+
+            # create dataframe from data in dict format 
+            df = pd.DataFrame(potential_harvests_dict['data'][table_title], columns=potential_harvests_dict['columns']) 
+
+            # call plot_table function, which returns the next y_coordinate for plotting a table to
+            # once the y_coordinates for a table are outside of the ax bound (< 0) then the function will return the string 'start_new_page'
+            # in that case, append the current figure to fig_list, then generate a new figure and re-plot the table on the new page
+            y_align = plot_table(table_title, ax, y_align)
+            if y_align == 'start_new_page':
+                plt.show() # show plot for testing in jupyter nb
+                fig_list.append(fig)
+                fig, ax, y_align = gen_fig()
+                y_align = plot_table(table_title, ax, y_align)
+            y_align -= overall_spacing
+        plt.show() # show plot for testing in jupyter nb
+        fig_list.append(fig)     
+
+        filename = f'./output_files/Potential Harvests {select_date.strftime("%Y-%m-%d")}.pdf'
+        out_filename = generate_multipage_pdf(fig_list, filename, add_pagenum=True, bbox_inches=None)
+        return out_filename
+    
             
     def plot_epa(self, plot_title='Pond EPA Overview'):
         def subplot_ax_format(subplot_ax, fill_color):

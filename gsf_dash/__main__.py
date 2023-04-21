@@ -49,12 +49,9 @@ def main(argv):
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error downloading or loading data', tb)
         
-    # plot Ponds Overview and get output filename
+    # plot Ponds Overview and get output filenames
     try:
-        plots = PondsOverviewPlots(args.date, scorecard_dataframe, epa_dict, active_dict)
-        overview_filename = plots.overview_out_filename
-        harvests_filename = plots.suggested_harvests_out_filename
-        epa_overview_filename = plots.epa_overview_out_filename
+        output_filenames = PondsOverviewPlots(args.date, scorecard_dataframe, epa_dict, active_dict).output_filenames
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error running pond overview script', tb)
@@ -70,7 +67,7 @@ def main(argv):
                # split recipients on ',' and remove whitespace because ConfigParser imports as a single string, but needs to be a list of each email string 
                 subject = f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}', # add date to the end of the email subject
                 msg_body = email_msg_info['body'],
-                attachments = [overview_filename, harvests_filename, epa_overview_filename]) 
+                attachments = output_filenames) 
     sys.exit(0) # exit with status 0 to indicate successful execution
     
 if __name__ == '__main__':   
