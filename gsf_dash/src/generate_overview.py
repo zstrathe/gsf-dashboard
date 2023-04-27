@@ -10,10 +10,11 @@ from matplotlib.patches import Ellipse, Rectangle
 from . import generate_multipage_pdf
 
 class PondsOverviewPlots:
-    def __init__(self, select_date, scorecard_dataframe, epa_data_dict, ponds_active_dict, save_output=True):
+    def __init__(self, select_date, scorecard_dataframe, processing_dataframe, epa_data_dict, active_dict, save_output=True):
         self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
         self.scorecard_dataframe = scorecard_dataframe
-        self.ponds_active_dict = ponds_active_dict
+        self.processing_dataframe = processing_dataframe
+        self.active_dict = active_dict
         self.save_output = save_output
         self.epa_data_dict = epa_data_dict
         self.potential_harvests_dict = None # initialize potential_harvests_dict, will be populated by self.plot_scorecard()
@@ -179,7 +180,7 @@ class PondsOverviewPlots:
 
             # Check prior 5 days of data to see if pond is active/in-use
             #nonlocal ponds_active_dict
-            pond_active = self.ponds_active_dict[pond_name]
+            pond_active = self.active_dict[pond_name]
 
             try:
                 single_pond_data = self.scorecard_dataframe[pond_name]
@@ -566,7 +567,7 @@ class PondsOverviewPlots:
                                '3-r': [0.9, 'right'],
                                '4-l': [0.94, 'left'],
                                '4-c': [1.05, 'center']}
-                                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+                                                                                                                                                                                                                        
                     plot_legend(legend_data, x_align, y_spacing=0.12)
                     
                 if 'BLANK 12-6' in pond_name: # plot the indicator legend in the first blank subplot in row 12                       
@@ -591,6 +592,9 @@ class PondsOverviewPlots:
                     
                     
                 elif 'BLANK 13-1' in pond_name:
+                    ''' 
+                    Plot information of various daily aggregates in this cell (13th row, column 1)
+                    '''
                     # add note for noncurrent AFDW or Depth data when they are being used
                     if any_noncurrent_flag: 
                         ax.text(0,0.95, "** indicates AFDW or Depth data that is not available for the current day, so using data from previous day", ha='left', va='center', fontsize='small')
@@ -600,9 +604,48 @@ class PondsOverviewPlots:
                                     + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{num_active_ponds_lg}\n'
                                    + r'$\bf{Calculated\/\/total\/\/mass:}$' + f'{total_mass_all:,} kg')
                     t = ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
-               # elif 'BLANK 13-3' in pond_name:
-                      
-                # elif 'BLANK 14-1' in pond_name:
+          
+                elif 'BLANK 13-3' in pond_name:
+                    '''
+                    Plot information of prior day processing totals from self.processing_dataframe
+                    on row 13, column 3
+                    '''
+                    processing_columns = {'Zobi Volume': 
+                                              {'column_name': 'Zobi Permeate Volume (gal)',
+                                                'num_format': int,
+                                                'str_label': 'gal'
+                                                },
+                                          'SF Volume': 
+                                              {'column_name': 'Calculated SF Permeate Volume (gal)',
+                                               'num_format': int,
+                                               'str_label': 'gal'
+                                                },
+                                          'Dryer SW': 
+                                              {'column_name': 'SW Dryer Biomass (MT)', 
+                                               'num_format': float,
+                                               'str_label': 'Mt'
+                                                },
+                                          'Dryer DD': 
+                                              {'column_name': 
+                                               'Drum Dryer Biomass (MT)', 
+                                               'num_format': float,
+                                               'str_label': 'Mt'
+                                                },
+                                          'Gallons Dropped': 
+                                              {'column_name': 'Gallons dropped',
+                                               'num_format': int,
+                                               'str_label': 'gal'
+                                              }
+                                         }
+                    prior_day_data = self.processing_dataframe.shift(1).loc[select_date]
+                    processing_data_to_plot = {}
+                    processing_data_str = f'Previous Day ({(select_date-pd.Timedelta(days=1)).strftime("%-m/%-d")}) Processing Totals \n'
+                    for k, subdict in processing_columns.items():
+                        processing_data_to_plot[k] = f'{subdict["num_format"](prior_day_data[subdict["column_name"]]):,} {subdict["str_label"]}'
+                        processing_data_str += f'{k}: {subdict["num_format"](prior_day_data[subdict["column_name"]]):,} {subdict["str_label"]}\n'
+                            
+                    ax.text(0,.75, processing_data_str, ha='left', va='top', fontsize='large', multialignment='left')
+                    
                     # print_string = (r'$\bf{Harvest\/\/Depth} =$' + '\n' + r'$\frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
                     #                 '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
                     #                 '\n' + r'$\bf{Target\/\/Harvest\/\/Down\/\/to\/\/AFDW}: $' + str(target_to_density) + 
@@ -760,7 +803,7 @@ class PondsOverviewPlots:
             inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=0, hspace=0)
 
             # get pond active status (True or False) from ponds_active_status dict
-            pond_active = self.ponds_active_dict[pond_name]
+            pond_active = self.active_dict[pond_name]
 
             # get data for individual pond only, as a list
             # each list entry should consist of a tuple containing the date and the epa value, sorted in descending order by date

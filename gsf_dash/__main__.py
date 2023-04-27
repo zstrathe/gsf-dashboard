@@ -42,16 +42,13 @@ def main(argv):
     # load data
     try:
         datadict = Dataloader(args.date).outdata
-        scorecard_dataframe = datadict['scorecard_dataframe']
-        epa_dict = datadict['epa_dict']
-        active_dict = datadict['active_dict']
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error downloading or loading data', tb)
         
     # plot Ponds Overview and get output filenames
     try:
-        output_filenames = PondsOverviewPlots(args.date, scorecard_dataframe, epa_dict, active_dict).output_filenames
+        output_filenames = PondsOverviewPlots(args.date, **datadict).output_filenames
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error running pond overview script', tb)

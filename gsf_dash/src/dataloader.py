@@ -14,15 +14,17 @@ class Dataloader:
                       '0104', '0204', '0304', '0404', '0504', '0604', '0704', '0804', '0904', '1004', '1104', '1204',
                       '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
                       '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
+        self.sharepoint_connections = {} # initialize dict to store sharepoint connection for each unique site, to re-use it when downloading multiple files
         if run:
-            self.sharepoint_connections = {} # initialize dict to store sharepoint connection for each unique site, to re-use it when downloading multiple files
             scorecard_datafile = self.download_data('scorecard_data_info')
             scorecard_dataframe = self.load_scorecard_data(scorecard_datafile)
             epa_datafile1 = self.download_data('epa_data_info1')
             epa_datafile2 = self.download_data('epa_data_info2')
             epa_data_dict = self.load_epa_data([epa_datafile1, epa_datafile2])
             active_dict = self.generate_active_dict(scorecard_dataframe, num_days_prior=5)
-            self.outdata = {'scorecard_dataframe': scorecard_dataframe, 'epa_dict': epa_data_dict, 'active_dict': active_dict}
+            processing_datafile = self.download_data('processing_data_info')
+            processing_dataframe = self.load_processing_data(processing_datafile)
+            self.outdata = {'scorecard_dataframe': scorecard_dataframe, 'epa_data_dict': epa_data_dict, 'active_dict': active_dict, 'processing_dataframe': processing_dataframe}
  
     def download_data(self, data_item_setting):
         sharepoint_site, file_url, download_path, expected_min_filesize, print_label = load_setting(data_item_setting).values()
@@ -46,10 +48,10 @@ class Dataloader:
                         print('Daily scorecard file download error')
                         return False
         if getsize(download_path) > int(expected_min_filesize):  # check that downloaded filesize is > 35 MB, in case of any download error
-            print(f'{print_label} successfully downloaded to {download_path}')
+            print(f'Successfully downloaded {print_label} to {download_path}')
             return download_path
         else:
-            print(f'{print_label} download error')
+            print(f'DOWNLOAD ERROR: {print_label}: filesize less than expected!')
             return False
 
     def load_scorecard_data(self, excel_filename):
@@ -58,9 +60,6 @@ class Dataloader:
         print('Loading scorecard data...')
         # Load the Daily Pond Scorecard excel file
         excel_sheets = pd.ExcelFile(excel_filename)
-
-        # Get list of all sheet names
-        sheetnames = sorted(excel_sheets.sheet_names)
 
         # create a dict containing a dataframe for each pond sheet
         all_ponds_data = {}
@@ -82,6 +81,16 @@ class Dataloader:
             updated_ponds[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
         print('Scorecard data loaded!')
         return updated_ponds # return the cleaned data dict
+    
+    def load_processing_data(self, excel_filename):
+        print('Loading processing data')
+        df = pd.read_excel(excel_filename, sheet_name='SF Harvest')
+        df = df.rename(columns={df.columns[0]:'date'})
+        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
+        df = df.set_index(df['date'].name) # set date column as index
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
+        print('Processing data loaded!')
+        return df
 
     def load_epa_data(self, excel_epa_data_filenames: list, debug_print=False) -> dict:
         ponds_list = self.ponds_list
