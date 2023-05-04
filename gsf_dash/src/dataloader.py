@@ -3,7 +3,7 @@ from datetime import datetime
 from office365.sharepoint.client_context import ClientContext
 from os.path import getsize, isfile
 import re
-from . import load_setting
+from . import load_setting, EmailHandler
 
 class Dataloader:
     def __init__(self, select_date, run=True):
@@ -54,6 +54,10 @@ class Dataloader:
             print(f'DOWNLOAD ERROR: {print_label}: filesize less than expected!')
             return False
 
+    def get_data_from_email(self, email_setting):
+        email_folder = load_setting(email_setting)
+        return EmailHandler().get_latest_email_attachment_from_folder(email_folder)
+        
     def load_scorecard_data(self, excel_filename):
         ponds_list = self.ponds_list
         
@@ -91,7 +95,17 @@ class Dataloader:
         df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
         print('Processing data loaded!')
         return df
-
+    
+    def load_sfdata(self, excel_filename):
+        print('Loading SF Data')
+        df = pd.read_excel(excel_filename, sheet_name='Customer Log')
+        df = df.rename(columns={df.columns[0]:'date'})
+        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
+        df = df.set_index(df['date'].name) # set date column as index
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
+        print('SF data loaded!')
+        return df 
+    
     def load_epa_data(self, excel_epa_data_filenames: list, debug_print=False) -> dict:
         ponds_list = self.ponds_list
         select_date = self.select_date

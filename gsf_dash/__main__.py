@@ -3,6 +3,9 @@ import argparse
 import traceback
 from datetime import datetime
 from src import Dataloader, PondsOverviewPlots, load_setting, send_email
+import functools
+# set print function to always flush buffer for running in terminal (i.e., running from a bash script) for ease of realtime monitoring
+print = functools.partial(print, flush=True)
 
 def main(argv):   
     

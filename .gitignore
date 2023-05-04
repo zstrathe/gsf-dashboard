@@ -3,6 +3,7 @@
 *.xlsx
 *.ipynb
 *__pycache__
+.~lock*
 prod/
 venv/
 dev_notebooks/

@@ -22,7 +22,7 @@ class PondsOverviewPlots:
         [self.output_filenames.append(x) for x in (self.plot_scorecard(), self.plot_potential_harvests(), self.plot_epa())]
         
     def plot_scorecard(self, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, plot_title='Pond Health Overview'): 
-        print('Plotting ponds overview...')
+        print('Plotting ponds overview...', flush=True)
     
         select_date = self.select_date
         
@@ -610,41 +610,66 @@ class PondsOverviewPlots:
                     Plot information of prior day processing totals from self.processing_dataframe
                     on row 13, column 3
                     '''
-                    processing_columns = {'Zobi Volume': 
+                    processing_columns = {'Zobi Volume:': 
                                               {'column_name': 'Zobi Permeate Volume (gal)',
                                                 'num_format': int,
                                                 'str_label': 'gal'
                                                 },
-                                          'SF Volume': 
-                                              {'column_name': 'Calculated SF Permeate Volume (gal)',
+                                          'SF Volume:': 
+                                              {'column_name': ['Calculated SF Permeate Volume (gal)', 'SF Reported Permeate Volume (gal)'], 
                                                'num_format': int,
                                                'str_label': 'gal'
                                                 },
-                                          'Dryer SW': 
+                                          'Dryer SW:': 
                                               {'column_name': 'SW Dryer Biomass (MT)', 
                                                'num_format': float,
                                                'str_label': 'Mt'
                                                 },
-                                          'Dryer DD': 
+                                          'Dryer DD:': 
                                               {'column_name': 
                                                'Drum Dryer Biomass (MT)', 
                                                'num_format': float,
                                                'str_label': 'Mt'
                                                 },
-                                          'Gallons Dropped': 
+                                          'Gallons Dropped:': 
                                               {'column_name': 'Gallons dropped',
                                                'num_format': int,
                                                'str_label': 'gal'
+                                              },
+                                          'Processing Notes:':
+                                              {'column_name': 'Notes',
+                                               'num_format': str,
+                                               'str_label': ''
                                               }
                                          }
-                    prior_day_data = self.processing_dataframe.shift(1).loc[select_date]
+                    prev_day_data = self.processing_dataframe.shift(1).loc[select_date]
                     processing_data_to_plot = {}
-                    processing_data_str = f'Previous Day ({(select_date-pd.Timedelta(days=1)).strftime("%-m/%-d")}) Processing Totals \n'
+                    processing_data_str = f'Previous Day ({(select_date-pd.Timedelta(days=1)).strftime("%-m/%-d")}) Processing Totals'
+                    proc_t = ax.text(0,.75, processing_data_str, ha='left', va='top', fontsize='large', multialignment='left')
+                    bb = proc_t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+                    ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
                     for k, subdict in processing_columns.items():
-                        processing_data_to_plot[k] = f'{subdict["num_format"](prior_day_data[subdict["column_name"]]):,} {subdict["str_label"]}'
-                        processing_data_str += f'{k}: {subdict["num_format"](prior_day_data[subdict["column_name"]]):,} {subdict["str_label"]}\n'
+                        if type(subdict['column_name']) != list:
+                            prev_day_val = prev_day_data[subdict["column_name"]]
+                        else:
+                            prev_day_val = 0
+                            for i in subdict['column_name']:
+                                if prev_day_data[i] > 0:
+                                    prev_day_val = prev_day_data[i]
                             
-                    ax.text(0,.75, processing_data_str, ha='left', va='top', fontsize='large', multialignment='left')
+                        if pd.isna(prev_day_val):
+                            if subdict['num_format'] == str:
+                                prev_day_val = ''
+                            else:
+                                prev_day_val = 0
+                       # processing_data_to_plot[k] = f'{subdict["num_format"](prev_day_val):,} {subdict["str_label"]}'
+                        if type(prev_day_val) == str:
+                            prev_day_val = prev_day_val.replace("/ ", "\n  ").replace(". ", ".\n  ")
+                            processing_data_str += f'\n{k}\n  {prev_day_val}'
+                        elif type(prev_day_val) != str:
+                            prev_day_val = f'{subdict["num_format"](prev_day_val):,} {subdict["str_label"]}'
+                            processing_data_str += f'\n{k} {prev_day_val}'     
+                    proc_t.update({'text': processing_data_str})
                     
                     # print_string = (r'$\bf{Harvest\/\/Depth} =$' + '\n' + r'$\frac{(Current\/\/Depth * Current\/\/AFDW) - (Target\/\/Top\/\/Off\/\/Depth * Target\/\/Harvest\/\/Down\/\/to\/\/AFDW)}{Current\/\/AFDW}$' +
                     #                 '\n' + r'$\bf{Target\/\/Harvest\/\/at\/\/AFDW}:$' + r'$\geq$' + str(harvest_density) +
