@@ -9,3 +9,5 @@ venv/
 dev_notebooks/
 .ipynb_checkpoints/
 *.backup*
+gsf_dash/src/ms_account_connect.py
+gsf_dash/src/file_data_extraction.py

@@ -55,8 +55,8 @@ class Dataloader:
             return False
 
     def get_data_from_email(self, email_setting):
-        email_folder = load_setting(email_setting)
-        return EmailHandler().get_latest_email_attachment_from_folder(email_folder)
+        print(**load_setting(email_setting))
+        return EmailHandler().get_latest_email_attachment_from_folder(**load_setting(email_setting))
         
     def load_scorecard_data(self, excel_filename):
         ponds_list = self.ponds_list
@@ -260,16 +260,15 @@ class Dataloader:
         
         def check_active_query(pond_name, prev_day_n): 
             try:
-                dat = pond_scorecard_data[pond_name][['Fo','Split Innoculum']].shift(prev_day_n).loc[select_date]
-                if pd.isna(dat[1]) == False: # condition when the 'Split Innoculum' column is not empty (i.e., not a NaN value)
-                    # check if pond is noted as "I" for inactive in the "Split Innoculum" column, 
-                    # if so, break immediately and return False in the outer function (return that the particular pond is "inactive")
-                    if dat[1].upper() == 'I': 
-                        return 'FalseBreakImmediate'
+                dat = pond_scorecard_data[pond_name][['Fo', 'Split Innoculum', 'Comments']].shift(prev_day_n).loc[select_date]
+                # check if pond is noted as "I" for inactive in the "Split Innoculum" column, or some variation of 'harvest complete' in the "Comments" column
+                # if so, break immediately and return False in the outer function (return that the particular pond is "inactive")
+                if str(dat[1]).upper() == 'I' or any(x in str(dat[2]).lower() for x in ['harvest complete', 'complete harvest', 'complete transfer']): 
+                    return 'FalseBreakImmediate'
                 elif pd.isna(dat[0]) or dat[0] == 0: # if 'Fo' data is NaN or 0
                     return False
                 else:
-                    return True  # return true since it can be assumed the dat[0] column contains a value if execution passed the prior conditional check
+                    return True  # return true since it can be assumed the dat[0] column contains a value if execution passed the prior conditional checks
             except:
                 return False # return false if querying the dataframe resulted in an error
         

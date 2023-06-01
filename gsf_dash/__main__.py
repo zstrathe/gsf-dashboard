@@ -12,8 +12,7 @@ def main(argv):
     def failure_notify_email_exit(failure_reason, traceback=None):
         print(failure_reason)
         email_msg_info = load_setting('email_failure_msg')
-        send_email(recipients = [x.strip() for x in email_msg_info['recipients'].split(',')], 
-                   # split recipients on ',' and remove whitespace because ConfigParser will import it as a single string, but should be a list if more than 1 address
+        send_email(recipients = email_msg_info['recipients'], 
                     subject = f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}', # add date to the end of the email subject
                     msg_body = f'{failure_reason}{f"<br><br>Traceback:<br>{traceback}" if traceback else ""}'
                   )
@@ -63,7 +62,7 @@ def main(argv):
     else:
         email_msg_info = load_setting('test_msg')
         
-    send_email(recipients = [x.strip() for x in email_msg_info['recipients'].split(',')], 
+    send_email(recipients = email_msg_info['recipients'], 
                # split recipients on ',' and remove whitespace because ConfigParser imports as a single string, but needs to be a list of each email string 
                 subject = f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}', # add date to the end of the email subject
                 msg_body = email_msg_info['body'],

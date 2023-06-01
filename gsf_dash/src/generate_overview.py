@@ -40,20 +40,25 @@ class PondsOverviewPlots:
         
         # helper function to query data from previous days, if it is not available for current day
         def current_or_prev_query(df, col_name, num_prev_days, return_noncurrent_flag=False):
-                    for day_num in range(0,num_prev_days+1):
-                        data = df[col_name].shift(day_num).fillna(0).loc[select_date] # use fillna(0) to force missing data as 0
-                        if data > 0:
-                            if return_noncurrent_flag and day_num == 0:
-                                return data, 'current' # return second value as 'current' to indicate data is current 
-                            elif return_noncurrent_flag and day_num > 0:
-                                return data, 'noncurrent' # return second value as 'non-current' to indicate data is not current (not from the current report day)
-                            else:
-                                return data
-                    if return_noncurrent_flag:
-                        return 0, 'n/a'
+            '''
+            col_name: the name of the df column to query
+            num_prev_days: the maximum number of days prior to look for data
+            return_noncurrent_flag: whether to return a string ("current" or "noncurrent") which indicates whether the value is from the current or a prior day
+            '''
+            for day_num in range(0,num_prev_days+1):
+                data = df[col_name].shift(day_num).fillna(0).loc[select_date] # use fillna(0) to force missing data as 0
+                if data > 0:
+                    if return_noncurrent_flag and day_num == 0:
+                        return data, 'current' # return second value as 'current' to indicate data is current 
+                    elif return_noncurrent_flag and day_num > 0:
+                        return data, 'noncurrent' # return second value as 'non-current' to indicate data is not current (not from the current report day)
                     else:
-                        return 0 # return 0 if no data found (though 'data' variable will be 0 anyway due to fillna(0) method used) 
-                
+                        return data
+            if return_noncurrent_flag:
+                return 0, 'n/a'
+            else:
+                return 0 # return 0 if no data found (though 'data' variable will be 0 anyway due to fillna(0) method used) 
+
         # helper function to query single data points from each pond dataframe
 #         def data_query(pond_data, pond_name, query_name):
 #             PLACEHOLDER TO IMPLEMENT WHEN GENERATING PLOT OF CURRENT VERSUS PREV DAY CHANGE
@@ -70,6 +75,169 @@ class PondsOverviewPlots:
                 depth_to_liters *= 2
             # calculate and return total mass (kg)
             return (afdw * depth_to_liters * depth) / 1000
+        
+        def calculate_growth(pond_data_df, select_date, num_days, remove_outliers, data_count_threshold=2, weighted_stats_for_outliers=True):
+            '''
+            pond_data_df: pandas dataframe
+                - dataframe for individual pond
+            select_date: datetime.date
+                - current date (required for growth relative to this date)
+            remove_outliers: bool
+                - whether to remove outliers from the data before calculating growth (which are then zeroed and forward-filled)
+                - outliers are calculated using the 10 most-recent non-zero data points
+                - when this is set then the current day is excluded from calculating mean and std. dev (since it's more likely to be an outlier itself)
+            num_days: int
+                - number of days to calculate growth for
+            data_count_threshold: int 
+                - absolute threshold for days that must have data within the num_days growth period, otherwise growth will be 'n/a'
+            weighted_stats_for_outliers: bool
+                - whether to use weighted statistics for finding outliers, applies 80% weight evenly to the most-recent 5 days, then 20% to the remainder
+            outlier_stddev_thresh: int
+                - the standard deviation threshold for determining outliers (when greater or less than the threshold * standard deviation)
+                - using a threshold of 2 standard deviations as default for more aggressive outlier detection (statistical standard is usally 3 std. dev.)
+            pond_test: str
+                - FOR TESTING: string corresponds to pond_name to display df output between steps
+            '''
+            
+            # the standard deviation threshold for determining outliers (when greater or less than the threshold * standard deviation)
+            # using a threshold of 2.25 standard deviations as default for more aggressive outlier detection (statistical standard is usally 3 std. dev.)
+            outlier_stddev_thresh = 2.25 
+            
+            pond_test=None # set to pond_name string for printing output at intermediate calculation steps
+            
+            # Select last 20 days of data for columns 'AFDW', 'Depth', and 'Split Innoculum' (higher num in case of missing data, etc)
+            pond_growth_df = pond_data_df.loc[select_date - pd.Timedelta(days=20):select_date][['AFDW (filter)', 'Depth', 'Split Innoculum']]
+            # Get calculated mass column from AFDW and Depth
+            pond_growth_df['mass'] = afdw_depth_to_mass(pond_growth_df['AFDW (filter)'], pond_growth_df['Depth'], pond_name)
+            
+            def next_since_harvest_check(row):
+                if row['mass'] != 0:
+                    if row['tmp harvest prev 1'] == 'Y': # if the previous day was harvested ('H' in 'Split Innoculum' col)
+                        return 'Y'
+                    elif row['tmp data prev 1'] == 'N' and row['tmp harvest prev 2'] == 'Y': # if 
+                        return 'Y'
+                    elif row['tmp data prev 1'] == 'N' and row['tmp data prev 2'] == 'N' and row['tmp harvest prev 3'] == 'Y':
+                        return 'Y'
+                    else:
+                        return ''
+                else:
+                    return ''
+
+            # find if row is the next data since harvest (i.e., if there is a few days delay in data since it was harvested), to ensure negative change from harvest is always zeroed out for growth calcs
+            pond_growth_df['tmp data prev 1'] = pond_growth_df['mass'].shift(1).apply(lambda val: 'Y' if val != 0 else 'N')
+            pond_growth_df['tmp data prev 2'] = pond_growth_df['mass'].shift(2).apply(lambda val: 'Y' if val != 0 else 'N')
+            pond_growth_df['tmp harvest prev 1'] = pond_growth_df['Split Innoculum'].shift(1).apply(lambda val: 'Y' if val == 'H' or val == 'S' else 'N')
+            pond_growth_df['tmp harvest prev 2'] = pond_growth_df['Split Innoculum'].shift(2).apply(lambda val: 'Y' if val == 'H' or val == 'S' else 'N')
+            pond_growth_df['tmp harvest prev 3'] = pond_growth_df['Split Innoculum'].shift(3).apply(lambda val: 'Y' if val == 'H' or val == 'S' else 'N')
+            pond_growth_df['next data since harvest'] = pond_growth_df.apply(lambda row: next_since_harvest_check(row), axis=1) 
+            del pond_growth_df['tmp data prev 1']
+            del pond_growth_df['tmp data prev 2'] 
+            del pond_growth_df['tmp harvest prev 1'] 
+            del pond_growth_df['tmp harvest prev 2'] 
+            del pond_growth_df['tmp harvest prev 3']
+
+            if remove_outliers: # calculate and drop outliers
+                # get a new df for outlier detection and drop the last/ most recent row, 
+                # assuming it is highly likely an outlier (due to data entry error, etc), so exclude that value from calc of mean and std dev for detecting outliers
+                mass_nonzero_ = pond_growth_df.drop([select_date], axis=0) 
+                mass_nonzero_ = mass_nonzero_[mass_nonzero_['mass'] != 0]['mass'] # get a pandas series with only nonzero values for calculated mass
+                # limit selection for outlier detection to the last 10 non-zero values
+                mass_nonzero_ = mass_nonzero_.iloc[-10:]
+                
+                if pond_name == pond_test:
+                    print('std dev: ', mass_nonzero_.std())
+                    print('mean: ', mass_nonzero_.mean())
+                    print('TEST LENGTH QUANTILESDF', len(mass_nonzero_), mass_nonzero_)
+                
+                if weighted_stats_for_outliers and len(mass_nonzero_) >= 5: # use weighted stats if specified, UNLESS there are less than 5 non-zero "mass" datapoints in total
+                    from statsmodels.stats.weightstats import DescrStatsW
+                    
+                    # init weights for weighted outlier detection (list should sum to 1 total)
+                    outlier_weights_ = [0.16]*5 # first 5 values weighted to 0.8 total
+                    if len(mass_nonzero_) > 5: # add more weights if necessary (between 1 and 5 more)
+                        outlier_weights_ += [((1-sum(outlier_weights_)) / (len(mass_nonzero_)-len(outlier_weights_)))] * (len(mass_nonzero_)-len(outlier_weights_))
+                    
+                    weighted_stats = DescrStatsW(mass_nonzero_.iloc[::-1], weights=outlier_weights_, ddof=0)
+
+                    if pond_name == pond_test:
+                        print(f'Weighted mean: {weighted_stats.mean}, Weighted Std Dev: {weighted_stats.std}, weighted outlier range (+- {outlier_stddev_thresh} std dev): <{weighted_stats.mean-(outlier_stddev_thresh*weighted_stats.std)}, >{weighted_stats.mean+(outlier_stddev_thresh*weighted_stats.std)}')
+                        print(f'Non-Weighted mean: {mass_nonzero_.mean()}, Non-Weighted Std Dev: {mass_nonzero_.std()}, non-weighted outlier range (+- {outlier_stddev_thresh} std dev): <{mass_nonzero_.mean()-(outlier_stddev_thresh*mass_nonzero_.std())}, >{mass_nonzero_.mean()+(outlier_stddev_thresh*mass_nonzero_.std())}')
+                        print('test df', test_mean := mass_nonzero_[-5:])
+                    
+                    mass_nonzero_mean_ = weighted_stats.mean
+                    mass_nonzero_std_ = weighted_stats.std
+                else: # using regular statistics / non-weighted
+                    mass_nonzero_mean_ = mass_nonzero_.mean()
+                    mass_nonzero_std_ = mass_nonzero_.std()
+
+                if pond_name == pond_test:
+                    print(f'TESTING FOR POND {pond_name}')
+                    print('outliers\n', pond_growth_df[(pond_growth_df['mass']-mass_nonzero_mean_).apply(lambda x: -x if x < 0 else x) >= (outlier_stddev_thresh*mass_nonzero_std_)], 'testing outliers')
+                
+                #outliers_df = pond_growth_df[np.abs(pond_growth_df['mass']-mass_nonzero_mean_) >= (outlier_stddev_thresh*mass_nonzero_std_)]
+                outliers_df = pond_growth_df[(pond_growth_df['mass']-mass_nonzero_mean_).apply(lambda x: -x if x < 0 else x) >= (outlier_stddev_thresh*mass_nonzero_std_)]
+                pond_growth_df = pond_growth_df.assign(outlier=pond_growth_df.index.isin(outliers_df.index)) # assign 'outliers' column equal to True if data point is an outlier
+
+                if pond_name == pond_test:
+                    print('Starting data\n')
+                    from IPython.display import display
+                    display(pond_growth_df)
+
+                # set the mass of outliers to 0
+                pond_growth_df['mass'] = pond_growth_df.apply(lambda row: 0 if row['outlier'] == True else row['mass'], axis=1)
+
+                if pond_name == pond_test:
+                    print('\nAfter removing outliers\n')
+                    display(pond_growth_df)
+            
+            # check if enough data exists for calculating growth, and return 'n/a' early if not
+            growth_period_data_count = pond_growth_df.loc[select_date - pd.Timedelta(days=num_days-1):select_date][pond_growth_df['mass'] != 0]['mass'].count()
+            if growth_period_data_count < data_count_threshold:
+                return 'n/a'
+            
+            # forward fill zero-values
+            pond_growth_df['mass'] = pond_growth_df['mass'].replace(0, float('nan')).fillna(method='ffill') # replace 0 with nan for fillna() to work
+
+            if pond_name == pond_test:
+                print('\nAfter forward-filling zero vals\n')
+                display(pond_growth_df)
+
+            # calculate estimated harvest amount, not used elsewhere but could be useful for some aggregate tracking
+            pond_growth_df['tmp prev mass'] = pond_growth_df['mass'].shift(1)
+            pond_growth_df['tmp next mass'] = pond_growth_df['mass'].shift(-1)
+            pond_growth_df['harvested estimate'] = pond_growth_df.apply(lambda row: row['tmp prev mass'] - row['mass'] if row['next data since harvest'] == 'Y' else 0, axis=1)
+
+            pond_growth_df['day chng'] = pond_growth_df.apply(lambda row: row['mass'] - row['tmp prev mass'] if row['next data since harvest'] != 'Y' else 0, axis=1)
+            del pond_growth_df['tmp prev mass'] 
+            del pond_growth_df['tmp next mass'] 
+
+            if pond_name == pond_test:
+                print('\nAfter calculating estimated harvest and daily change in mass')
+                display(pond_growth_df)
+
+            # calculate growth
+            try:
+                daily_growth_rate_ = int(pond_growth_df.loc[select_date - pd.Timedelta(days=num_days-1):select_date]['day chng'].sum() / num_days)
+                if pond_name == pond_test:
+                    display(daily_growth_rate_)
+                return daily_growth_rate_
+            except:
+                return 'n/a: Error'
+
+                ## TODO: outlier detection (pond 0402 - 1/16/23 as example of outlier to remove)
+                # import numpy as np
+#                         quantiles_df = pond_growth_df[pond_growth_df['mass'] != 0]['mass']
+#                         print('std dev: ', quantiles_df.std())
+#                         print('mean: ', quantiles_df.mean())
+#                         print(quantiles_df[np.abs(quantiles_df-quantiles_df.mean()) <= (3*quantiles_df.std())])
+
+#                         quantile_low = quantiles_df.quantile(0.01)
+#                         quantile_high = quantiles_df.quantile(0.99)
+#                         iqr = quantile_high - quantile_low
+#                         low_bound = quantile_low - (1.5*iqr)
+#                         high_bound = quantile_high + (1.5*iqr)
+#                         print('low quantile: ', quantile_low, '| high quantile: ', quantile_high)
+#                         print('low bound: ', low_bound, '| high bound: ', high_bound)
         
         def subplot_ax_format(subplot_ax):
             subplot_ax.spines['top'].set_visible(False)
@@ -179,7 +347,6 @@ class PondsOverviewPlots:
             inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=-0.01, hspace=-0.01) # each individual plot (from gridspec) is divided into subplots with 5 rows and 3 columns
 
             # Check prior 5 days of data to see if pond is active/in-use
-            #nonlocal ponds_active_dict
             pond_active = self.active_dict[pond_name]
 
             try:
@@ -259,10 +426,10 @@ class PondsOverviewPlots:
                     pond_data_harvestable_depth = 0
                     pond_data_harvestable_mass = 0
                 
-                # Query and format (color code) of pests for each pond
+                # Query pests data for each pond
                 indicators_data = date_single_pond_data[['pH', 'Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
-                                    'Tetra','Green Algae']].fillna(0)
-                
+                                    'Tetra','Green Algae']].apply(pd.to_numeric, errors='coerce').fillna(0)
+             
                 # Get the % nanno indicator separately and join to indicators_data
                 # This is due to the value sometimes being missing, so look back to previous days (up to 2) to get it
                 pct_nanno = current_or_prev_query(single_pond_data, '% Nanno', 2)
@@ -321,64 +488,12 @@ class PondsOverviewPlots:
                         fill_color = 'tan' # indicate out-of-spec EPA value
                     elif color_idx > 1 and epa_val < 3.0:
                         fill_color = 'yellow'
-
-            ## Calculate growth rates since last harvest / and 5-day   
-            ## TODO: Reformulate to calculate based on average of each daily change (currently just checking difference between two values and dividing by # days)
-            ## TODO: show number of days since last harvest with the growth rate?
-            if last_harvest_idx != 'n/a':   
-                new_growth_start_idx = last_harvest_idx + pd.Timedelta(days=1)
-                if pond_active == True:       
-                        if new_growth_start_idx < select_date: # i.e., if pond has more than 1 day of growth
-                            # select only data for the period of growth that's being calculated
-                            pond_growth_df = single_pond_data.loc[new_growth_start_idx:select_date][['AFDW (filter)', 'Depth']]
-                            # calculate mass to use for calculating growth rate 
-                            pond_growth_df['mass'] = afdw_depth_to_mass(pond_growth_df['AFDW (filter)'], pond_growth_df['Depth'], pond_name)
-                            # replace 0 values with 'nan' for interpolation to work and fill gaps of missing data
-                            pond_growth_df['mass'] = pond_growth_df['mass'].replace(0, float('nan'))
-                            # interpolate missing data (will not fill beginning or end values if they're missing)
-                            pond_growth_df['mass'] = pond_growth_df['mass'].interpolate()
-                            # drop missing values after interpolation (should just be values at beginning of period)
-                            # but could also drop the current selection date if AFDW or Depth is missing for this day
-                            pond_growth_df = pond_growth_df.dropna(subset=['mass'])
-                            
-                            # calculate the number of growth days
-                            # Do this after dropping empty leading/trailing rows because those are not being included in growth calculation 
-                            # because there isn't a great method of linearly extrapolating and estimating mass values for those rows
-                            num_growth_days = (pond_growth_df.index[-1] - pond_growth_df.index[0]).days
-                            
-                            # calculate growth rates
-                            # assume last harvest date is not valid if growing days are more than 90
-                            # also don't calculate if there are 0 growing days (AKA 0 days of data since last harvest/split)
-                            if num_growth_days > 90 or num_growth_days == 0: 
-                                daily_growth_rate_since_harvest = 'n/a'
-                            else:
-                                daily_growth_rate_since_harvest = int((pond_growth_df['mass'].iloc[-1] - pond_growth_df['mass'].iloc[0])/num_growth_days)
-                                #daily_growth_rate_since_harvest = round(((pond_growth_df['mass'].iloc[-1] - pond_growth_df['mass'].iloc[0]) / pond_growth_df['mass'].iloc[0])/num_growth_days,4)
-                            # just use a try/except clause since the 5 day growth calculation will cause error if there aren't 5 days of available data in the current growth period
-                            try:        
-                                daily_growth_rate_5_days = int((pond_growth_df['mass'].iloc[-1] - pond_growth_df['mass'].iloc[-5])/5)
-                                #daily_growth_rate_5_days = round(((pond_growth_df['mass'].iloc[-1] - pond_growth_df['mass'].iloc[-5]) / pond_growth_df['mass'].iloc[-5])/5,4)
-                            except:
-                                daily_growth_rate_5_days = 'n/a'
-                        else: # if pond has 1 or less days of growth (can't calculate rate)
-                            daily_growth_rate_since_harvest = 'n/a'
-                            daily_growth_rate_5_days = 'n/a'
-                        
-                        ## TODO: outlier detection (pond 0402 - 1/16/23 as example of outlier to remove)
-                        # import numpy as np
-#                         quantiles_df = pond_growth_df[pond_growth_df['mass'] != 0]['mass']
-#                         print('std dev: ', quantiles_df.std())
-#                         print('mean: ', quantiles_df.mean())
-#                         print(quantiles_df[np.abs(quantiles_df-quantiles_df.mean()) <= (3*quantiles_df.std())])
-
-#                         quantile_low = quantiles_df.quantile(0.01)
-#                         quantile_high = quantiles_df.quantile(0.99)
-#                         iqr = quantile_high - quantile_low
-#                         low_bound = quantile_low - (1.5*iqr)
-#                         high_bound = quantile_high + (1.5*iqr)
-#                         print('low quantile: ', quantile_low, '| high quantile: ', quantile_high)
-#                         print('low bound: ', low_bound, '| high bound: ', high_bound)
-                                
+                
+            ## Calculate growth rates 
+            if pond_active == True:   
+                daily_growth_rate_5_days = calculate_growth(pond_data_df=single_pond_data, select_date=select_date, num_days=5, remove_outliers=False)
+                daily_growth_rate_5_days_corrected = calculate_growth(pond_data_df=single_pond_data, select_date=select_date, num_days=5, remove_outliers=True, weighted_stats_for_outliers=True)  
+                
             # title subplot
             title_ax = plt.Subplot(fig, inner_plot[:2,:])
 
@@ -446,18 +561,24 @@ class PondsOverviewPlots:
                 else:
                     pond_data_harvestable_depth = f'{pond_data_harvestable_depth}"'
                 
-                if daily_growth_rate_since_harvest == 'n/a':
-                    pass # don't need to reformat in this case
-                else:
-                    daily_growth_rate_since_harvest = f'{daily_growth_rate_since_harvest} kg/day'
+                # format corrected growth rate prior to formatting regular growth rate since equality check needs to be done (otherwise adding "kg/day" to end causes issues/or extra steps)
+                if daily_growth_rate_5_days_corrected == daily_growth_rate_5_days:
+                    daily_growth_rate_5_days_corrected = '' # set corrected rate to empty string so it wont be shown, if it's not different from the "regular" rate
+                elif daily_growth_rate_5_days_corrected == 'n/a':
+                    if daily_growth_rate_5_days == 'n/a':
+                        daily_growth_rate_5_days_corrected = '' # set non-calculable corrected rate to empty string, if "regular" rate is also non-calculable
+                    else:
+                        pass # keep 'n/a' as value for corrected growth rate if it is non-calculable, but there is a valid "regular" growth rate (to indicate that there's something wrong with the "regular" rate)
+                else: 
+                    daily_growth_rate_5_days_corrected = f'{daily_growth_rate_5_days_corrected} kg/day'
                 
                 if daily_growth_rate_5_days == 'n/a':
                     pass # don't need to reformat in this case
-                else: 
+                else:
                     daily_growth_rate_5_days = f'{daily_growth_rate_5_days} kg/day'
                 
                 data_plot_dict = {'Measurement': {'Depth:': pond_data_depth, 'AFDW:': pond_data_afdw},
-                                  'Growth': {'From Last H/S:': daily_growth_rate_since_harvest,  '5 Days:': daily_growth_rate_5_days},
+                                  'Growth': {'5 Days:': daily_growth_rate_5_days,  f'{"Corrected:" if daily_growth_rate_5_days_corrected != "" else ""}': daily_growth_rate_5_days_corrected},
                                   'Harvestable': {'Mass:': pond_data_harvestable_mass, 'Depth:': pond_data_harvestable_depth}
                                   }
 
@@ -605,7 +726,7 @@ class PondsOverviewPlots:
                                    + r'$\bf{Calculated\/\/total\/\/mass:}$' + f'{total_mass_all:,} kg')
                     t = ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
           
-                elif 'BLANK 13-3' in pond_name:
+                elif 'BLANK 14-1' in pond_name:
                     '''
                     Plot information of prior day processing totals from self.processing_dataframe
                     on row 13, column 3
@@ -645,7 +766,7 @@ class PondsOverviewPlots:
                     prev_day_data = self.processing_dataframe.shift(1).loc[select_date]
                     processing_data_to_plot = {}
                     processing_data_str = f'Previous Day ({(select_date-pd.Timedelta(days=1)).strftime("%-m/%-d")}) Processing Totals'
-                    proc_t = ax.text(0,.75, processing_data_str, ha='left', va='top', fontsize='large', multialignment='left')
+                    proc_t = ax.text(0,1, processing_data_str, ha='left', va='top', fontsize='large', multialignment='left')
                     bb = proc_t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
                     ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
                     for k, subdict in processing_columns.items():
