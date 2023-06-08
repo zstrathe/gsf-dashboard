@@ -64,9 +64,6 @@ class PondsOverviewPlots:
 #             PLACEHOLDER TO IMPLEMENT WHEN GENERATING PLOT OF CURRENT VERSUS PREV DAY CHANGE
 #
 #
-#
-#
-        
         # helper function to convert density & depth to mass (in kilograms)
         def afdw_depth_to_mass(afdw, depth, pond_name):
             depth_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
@@ -733,33 +730,32 @@ class PondsOverviewPlots:
                     '''
                     processing_columns = {'Zobi Volume:': 
                                               {'column_name': 'Zobi Permeate Volume (gal)',
-                                                'num_format': int,
+                                                'data_format': int,
                                                 'str_label': 'gal'
                                                 },
                                           'SF Volume:': 
-                                              {'column_name': ['Calculated SF Permeate Volume (gal)', 'SF Reported Permeate Volume (gal)'], 
-                                               'num_format': int,
+                                              {'column_name': ['Calculated SF Permeate Volume (gal)', 'SF Reported Permeate Volume (gal)'],  # 1st is primary source, 2nd is secondary source if no data for primary
+                                               'data_format': int,
                                                'str_label': 'gal'
                                                 },
                                           'Dryer SW:': 
                                               {'column_name': 'SW Dryer Biomass (MT)', 
-                                               'num_format': float,
+                                               'data_format': float,
                                                'str_label': 'Mt'
                                                 },
                                           'Dryer DD:': 
-                                              {'column_name': 
-                                               'Drum Dryer Biomass (MT)', 
-                                               'num_format': float,
+                                              {'column_name': 'Drum Dryer Biomass (MT)', 
+                                               'data_format': float,
                                                'str_label': 'Mt'
                                                 },
                                           'Gallons Dropped:': 
                                               {'column_name': 'Gallons dropped',
-                                               'num_format': int,
+                                               'data_format': int,
                                                'str_label': 'gal'
                                               },
                                           'Processing Notes:':
                                               {'column_name': 'Notes',
-                                               'num_format': str,
+                                               'data_format': str,
                                                'str_label': ''
                                               }
                                          }
@@ -770,25 +766,37 @@ class PondsOverviewPlots:
                     bb = proc_t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
                     ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
                     for k, subdict in processing_columns.items():
-                        if type(subdict['column_name']) != list:
-                            prev_day_val = prev_day_data[subdict["column_name"]]
-                        else:
-                            prev_day_val = 0
+                        if type(subdict['column_name']) == list: # when 'column_name' is a list, get the first item with data (so first item in list is primary source)
                             for i in subdict['column_name']:
-                                if prev_day_data[i] > 0:
-                                    prev_day_val = prev_day_data[i]
+                                try: # force the data item to the 'data_format' type, with try/except to catch errors
+                                    data_i = subdict['data_format'](prev_day_data[i])
+                                    if (subdict['data_format'] == str and (data_i != '' or data_i != 'nan')) or (subdict['data_format'] != str and data_i != 0):
+                                        prev_day_val = data_i
+                                        break # if valid data is found, then break and stop evaluating any more columns
+                                    else:
+                                        prev_day_val = None
+                                except: 
+                                    prev_day_val = None
+                        else: 
+                            try:
+                                prev_day_val = subdict['data_format'](prev_day_data[subdict["column_name"]])
+                                if (subdict['data_format'] == str and (prev_day_val == '' or prev_day_val == 'nan')) or (subdict['data_format'] != str and prev_day_value == 0):
+                                    prev_day_val = None
+                            except:
+                                prev_day_val = None
                             
                         if pd.isna(prev_day_val):
-                            if subdict['num_format'] == str:
+                            if subdict['data_format'] == str:
                                 prev_day_val = ''
                             else:
                                 prev_day_val = 0
+                                
                        # processing_data_to_plot[k] = f'{subdict["num_format"](prev_day_val):,} {subdict["str_label"]}'
                         if type(prev_day_val) == str:
                             prev_day_val = prev_day_val.replace("/ ", "\n  ").replace(". ", ".\n  ")
                             processing_data_str += f'\n{k}\n  {prev_day_val}'
                         elif type(prev_day_val) != str:
-                            prev_day_val = f'{subdict["num_format"](prev_day_val):,} {subdict["str_label"]}'
+                            prev_day_val = f'{subdict["data_format"](prev_day_val):,} {subdict["str_label"]}'
                             processing_data_str += f'\n{k} {prev_day_val}'     
                     proc_t.update({'text': processing_data_str})
                     
