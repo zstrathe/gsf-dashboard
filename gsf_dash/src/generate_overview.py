@@ -20,7 +20,100 @@ class PondsOverviewPlots:
         self.potential_harvests_dict = None # initialize potential_harvests_dict, will be populated by self.plot_scorecard()
         self.output_filenames = [] # initialize a list to collect output filenames
         [self.output_filenames.append(x) for x in (self.plot_scorecard(), self.plot_potential_harvests(), self.plot_epa())]
+
+    # function to plot outlined legend boxes, using a dict of labels/data, and a separate dict of x_alignments (see examples of dict structure in calls to this function)
+    def plot_legend(self, fig, ax, legend_data, x_align, y_spacing, y_align=0.9):
+        y_align = y_align # start y-coord for plotting legend
+        max_coords = [1,1,0,0] #  initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
+        data_rows_x_bound = [1,0]
+        data_rows_y_bounds = [] 
+        indicator_plots = []
+        for row in legend_data:
+            row_y_bound = [1,0]
+            row_fill_color = 'white'
+            if 'fill_color' in row:
+                row_fill_color = row['fill_color']
+
+            for idx, (label, properties) in enumerate(row['labels'].items()):
+                underline = False
+                text_weight = 'normal'
+                text_color = 'black'
+
+                if 'weight' in properties:
+                    if properties['weight'] == 'underline': # check if 'underline' option since it's not an option in matplotlib and needs to be added after text with an annotation using text bounding box coords
+                        underline = True
+                    elif properties['weight'] == 'bold': 
+                        text_weight = 'bold'
+
+                if 'color' in properties:
+                    text_color = properties['color']
+
+                if 'indicator_fill' in properties: # plot indicators instead of normal text
+                    # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
+                    # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
+                    ax_x0, ax_y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
+                    ax_x1, ax_y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
+                    ax_dx = ax_x1 - ax_x0
+                    ax_dy = ax_y1 - ax_y0
+                    ax_maxd = max(ax_dx, ax_dy)
+                    circle_width = .07 * ax_maxd / ax_dx
+                    circle_height = .07 * ax_maxd / ax_dy
+
+                    # plot indicator
+                    t = ax.add_patch(Ellipse((x_align[properties['align']][0], y_align), circle_width, circle_height, color=properties['indicator_fill'], fill=properties['indicator_fill'], clip_on=False))
+                    ax.text(x_align[properties['align']][0], y_align, label, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7, clip_on=False)
+
+                else:
+                    t = ax.text(x_align[properties['align']][0], y_align, label, ha = x_align[properties['align']][1], va = 'center', weight=text_weight, color=text_color)
+
+                # get bounding box of plotted items
+                bb = t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+
+                if underline:
+                    ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
+
+                # update the max coord boundaries for the rows that are assigned a color
+                if row_fill_color != 'white':  
+                    #print(label, bb)
+                    if 'excl_color' not in properties: # add option of excluding a row item from being colored
+                        if bb.x0 < data_rows_x_bound[0]:
+                            data_rows_x_bound[0] = bb.x0
+                        if bb.x1 > data_rows_x_bound[1]:
+                            data_rows_x_bound[1] = bb.x1
+                        if bb.y0 < row_y_bound[0]:
+                            row_y_bound[0] = bb.y0
+                        if bb.y1 > row_y_bound[1]:
+                            row_y_bound[1] = bb.y1
+
+                # update max_coords for bounding box around legend and for x-bounds of rows that will be filled with color
+                if bb.x0 < max_coords[0]:
+                    max_coords[0] = bb.x0
+                if bb.y0 < max_coords[1]:
+                    max_coords[1] = bb.y0
+                if bb.x1 > max_coords[2]:
+                    max_coords[2] = bb.x1
+                if bb.y1 > max_coords[3]:
+                    max_coords[3] = bb.y1
+
+            y_align -= y_spacing # decrease y coord for each line for spacing       
+
+            if row_fill_color != 'white':
+                data_rows_y_bounds.append((row_y_bound,row_fill_color))
+
+        #print('rows x-bound:', data_rows_x_bound)    
+        #print('row y-bounds:', data_rows_y_bounds)
         
+        # plot colored rectangle for corresponding row
+        row_box_padding = 0.01
+        for row_y in data_rows_y_bounds:
+            ax.add_patch(Rectangle((data_rows_x_bound[0]-row_box_padding,row_y[0][0]-row_box_padding),data_rows_x_bound[1]-data_rows_x_bound[0]+row_box_padding*2,row_y[0][1]-row_y[0][0]+row_box_padding*2,linewidth=0,edgecolor=None,facecolor=row_y[1], clip_on=False))
+        
+        # plot color filled box around legend text
+        box_padding = 0.03
+        box_xy = (max_coords[0]-box_padding, max_coords[1]-box_padding)
+        box_width = max_coords[1]-max_coords[0]
+        ax.add_patch(Rectangle((max_coords[0]-box_padding,max_coords[1]-box_padding),max_coords[2]-max_coords[0]+box_padding*2,max_coords[3]-max_coords[1]+box_padding*2,linewidth=1,edgecolor='black',facecolor='none',clip_on=False))
+    
     def plot_scorecard(self, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, plot_title='Pond Health Overview'): 
         print('Plotting ponds overview...', flush=True)
     
@@ -246,97 +339,97 @@ class PondsOverviewPlots:
             fig.add_subplot(subplot_ax)
          
         # function to plot outlined legend boxes, using a dict of labels/data, and a separate dict of x_alignments (see examples of dict structure in calls to this function)
-        def plot_legend(legend_data, x_align, y_spacing, y_align=0.9):
-            y_align = y_align # start y-coord for plotting legend
-            max_coords = [1,1,0,0] #  initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
-            data_rows_x_bound = [1,0]
-            data_rows_y_bounds = [] 
-            indicator_plots = []
-            for row in legend_data:
-                row_y_bound = [1,0]
-                row_fill_color = 'white'
-                if 'fill_color' in row:
-                    row_fill_color = row['fill_color']
+        # def plot_legend(legend_data, x_align, y_spacing, y_align=0.9):
+        #     y_align = y_align # start y-coord for plotting legend
+        #     max_coords = [1,1,0,0] #  initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
+        #     data_rows_x_bound = [1,0]
+        #     data_rows_y_bounds = [] 
+        #     indicator_plots = []
+        #     for row in legend_data:
+        #         row_y_bound = [1,0]
+        #         row_fill_color = 'white'
+        #         if 'fill_color' in row:
+        #             row_fill_color = row['fill_color']
 
-                for idx, (label, properties) in enumerate(row['labels'].items()):
-                    underline = False
-                    text_weight = 'normal'
-                    text_color = 'black'
+        #         for idx, (label, properties) in enumerate(row['labels'].items()):
+        #             underline = False
+        #             text_weight = 'normal'
+        #             text_color = 'black'
 
-                    if 'weight' in properties:
-                        if properties['weight'] == 'underline': # check if 'underline' option since it's not an option in matplotlib and needs to be added after text with an annotation using text bounding box coords
-                            underline = True
-                        elif properties['weight'] == 'bold': 
-                            text_weight = 'bold'
+        #             if 'weight' in properties:
+        #                 if properties['weight'] == 'underline': # check if 'underline' option since it's not an option in matplotlib and needs to be added after text with an annotation using text bounding box coords
+        #                     underline = True
+        #                 elif properties['weight'] == 'bold': 
+        #                     text_weight = 'bold'
 
-                    if 'color' in properties:
-                        text_color = properties['color']
+        #             if 'color' in properties:
+        #                 text_color = properties['color']
 
-                    if 'indicator_fill' in properties: # plot indicators instead of normal text
-                        # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
-                        # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
-                        ax_x0, ax_y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
-                        ax_x1, ax_y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
-                        ax_dx = ax_x1 - ax_x0
-                        ax_dy = ax_y1 - ax_y0
-                        ax_maxd = max(ax_dx, ax_dy)
-                        circle_width = .07 * ax_maxd / ax_dx
-                        circle_height = .07 * ax_maxd / ax_dy
+        #             if 'indicator_fill' in properties: # plot indicators instead of normal text
+        #                 # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
+        #                 # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
+        #                 ax_x0, ax_y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
+        #                 ax_x1, ax_y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
+        #                 ax_dx = ax_x1 - ax_x0
+        #                 ax_dy = ax_y1 - ax_y0
+        #                 ax_maxd = max(ax_dx, ax_dy)
+        #                 circle_width = .07 * ax_maxd / ax_dx
+        #                 circle_height = .07 * ax_maxd / ax_dy
 
-                        # plot indicator
-                        t = ax.add_patch(Ellipse((x_align[properties['align']][0], y_align), circle_width, circle_height, color=properties['indicator_fill'], fill=properties['indicator_fill'], clip_on=False))
-                        ax.text(x_align[properties['align']][0], y_align, label, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7, clip_on=False)
+        #                 # plot indicator
+        #                 t = ax.add_patch(Ellipse((x_align[properties['align']][0], y_align), circle_width, circle_height, color=properties['indicator_fill'], fill=properties['indicator_fill'], clip_on=False))
+        #                 ax.text(x_align[properties['align']][0], y_align, label, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7, clip_on=False)
 
-                    else:
-                        t = ax.text(x_align[properties['align']][0], y_align, label, ha = x_align[properties['align']][1], va = 'center', weight=text_weight, color=text_color)
+        #             else:
+        #                 t = ax.text(x_align[properties['align']][0], y_align, label, ha = x_align[properties['align']][1], va = 'center', weight=text_weight, color=text_color)
 
-                    # get bounding box of plotted items
-                    bb = t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+        #             # get bounding box of plotted items
+        #             bb = t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
 
-                    if underline:
-                        ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
+        #             if underline:
+        #                 ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
 
-                    # update the max coord boundaries for the rows that are assigned a color
-                    if row_fill_color != 'white':  
-                        #print(label, bb)
-                        if 'excl_color' not in properties: # add option of excluding a row item from being colored
-                            if bb.x0 < data_rows_x_bound[0]:
-                                data_rows_x_bound[0] = bb.x0
-                            if bb.x1 > data_rows_x_bound[1]:
-                                data_rows_x_bound[1] = bb.x1
-                            if bb.y0 < row_y_bound[0]:
-                                row_y_bound[0] = bb.y0
-                            if bb.y1 > row_y_bound[1]:
-                                row_y_bound[1] = bb.y1
+        #             # update the max coord boundaries for the rows that are assigned a color
+        #             if row_fill_color != 'white':  
+        #                 #print(label, bb)
+        #                 if 'excl_color' not in properties: # add option of excluding a row item from being colored
+        #                     if bb.x0 < data_rows_x_bound[0]:
+        #                         data_rows_x_bound[0] = bb.x0
+        #                     if bb.x1 > data_rows_x_bound[1]:
+        #                         data_rows_x_bound[1] = bb.x1
+        #                     if bb.y0 < row_y_bound[0]:
+        #                         row_y_bound[0] = bb.y0
+        #                     if bb.y1 > row_y_bound[1]:
+        #                         row_y_bound[1] = bb.y1
 
-                    # update max_coords for bounding box around legend and for x-bounds of rows that will be filled with color
-                    if bb.x0 < max_coords[0]:
-                        max_coords[0] = bb.x0
-                    if bb.y0 < max_coords[1]:
-                        max_coords[1] = bb.y0
-                    if bb.x1 > max_coords[2]:
-                        max_coords[2] = bb.x1
-                    if bb.y1 > max_coords[3]:
-                        max_coords[3] = bb.y1
+        #             # update max_coords for bounding box around legend and for x-bounds of rows that will be filled with color
+        #             if bb.x0 < max_coords[0]:
+        #                 max_coords[0] = bb.x0
+        #             if bb.y0 < max_coords[1]:
+        #                 max_coords[1] = bb.y0
+        #             if bb.x1 > max_coords[2]:
+        #                 max_coords[2] = bb.x1
+        #             if bb.y1 > max_coords[3]:
+        #                 max_coords[3] = bb.y1
 
-                y_align -= y_spacing # decrease y coord for each line for spacing       
+        #         y_align -= y_spacing # decrease y coord for each line for spacing       
 
-                if row_fill_color != 'white':
-                    data_rows_y_bounds.append((row_y_bound,row_fill_color))
+        #         if row_fill_color != 'white':
+        #             data_rows_y_bounds.append((row_y_bound,row_fill_color))
 
-            #print('rows x-bound:', data_rows_x_bound)    
-            #print('row y-bounds:', data_rows_y_bounds)
+        #     #print('rows x-bound:', data_rows_x_bound)    
+        #     #print('row y-bounds:', data_rows_y_bounds)
             
-            # plot colored rectangle for corresponding row
-            row_box_padding = 0.01
-            for row_y in data_rows_y_bounds:
-                ax.add_patch(Rectangle((data_rows_x_bound[0]-row_box_padding,row_y[0][0]-row_box_padding),data_rows_x_bound[1]-data_rows_x_bound[0]+row_box_padding*2,row_y[0][1]-row_y[0][0]+row_box_padding*2,linewidth=0,edgecolor=None,facecolor=row_y[1], clip_on=False))
+        #     # plot colored rectangle for corresponding row
+        #     row_box_padding = 0.01
+        #     for row_y in data_rows_y_bounds:
+        #         ax.add_patch(Rectangle((data_rows_x_bound[0]-row_box_padding,row_y[0][0]-row_box_padding),data_rows_x_bound[1]-data_rows_x_bound[0]+row_box_padding*2,row_y[0][1]-row_y[0][0]+row_box_padding*2,linewidth=0,edgecolor=None,facecolor=row_y[1], clip_on=False))
             
-            # plot color filled box around legend text
-            box_padding = 0.03
-            box_xy = (max_coords[0]-box_padding, max_coords[1]-box_padding)
-            box_width = max_coords[1]-max_coords[0]
-            ax.add_patch(Rectangle((max_coords[0]-box_padding,max_coords[1]-box_padding),max_coords[2]-max_coords[0]+box_padding*2,max_coords[3]-max_coords[1]+box_padding*2,linewidth=1,edgecolor='black',facecolor='none',clip_on=False))
+        #     # plot color filled box around legend text
+        #     box_padding = 0.03
+        #     box_xy = (max_coords[0]-box_padding, max_coords[1]-box_padding)
+        #     box_width = max_coords[1]-max_coords[0]
+        #     ax.add_patch(Rectangle((max_coords[0]-box_padding,max_coords[1]-box_padding),max_coords[2]-max_coords[0]+box_padding*2,max_coords[3]-max_coords[1]+box_padding*2,linewidth=1,edgecolor='black',facecolor='none',clip_on=False))
 
         
         # function to plot each pond to ensure that data for each plot is kept within a local scope
@@ -686,7 +779,7 @@ class PondsOverviewPlots:
                                '4-l': [0.94, 'left'],
                                '4-c': [1.05, 'center']}
                                                                                                                                                                                                                         
-                    plot_legend(legend_data, x_align, y_spacing=0.12)
+                    self.plot_legend(fig, ax, legend_data, x_align, y_spacing=0.12)
                     
                 if 'BLANK 12-6' in pond_name: # plot the indicator legend in the first blank subplot in row 12                       
                     legend_data = [{'labels':{'Health/Pest Indicators': {'align': '1-l', 'weight': 'bold'}}},
@@ -706,7 +799,7 @@ class PondsOverviewPlots:
                                '2': [0.85, 'center'],
                                '3-c': [1.25, 'center']}
                     
-                    plot_legend(legend_data, x_align, y_spacing=0.15)
+                    self.plot_legend(fig, ax, legend_data, x_align, y_spacing=0.15)
                     
                     
                 elif 'BLANK 13-1' in pond_name:
@@ -939,8 +1032,7 @@ class PondsOverviewPlots:
         filename = f'./output_files/Potential Harvests {select_date.strftime("%Y-%m-%d")}.pdf'
         out_filename = generate_multipage_pdf(fig_list, filename, add_pagenum=True, bbox_inches=None)
         return out_filename
-    
-            
+
     def plot_epa(self, plot_title='Pond EPA Overview'):
         def subplot_ax_format(subplot_ax, fill_color):
             subplot_ax.set_facecolor(fill_color)
@@ -963,11 +1055,11 @@ class PondsOverviewPlots:
             # each list entry should consist of a tuple containing the date and the epa value, sorted in descending order by date
             single_pond_data = list(self.epa_data_dict[pond_name].items())
 
-             # check and update the title_date global variable if this pond has a more recent date
+             # check and update the latest_sample_date global variable if this pond has a more recent date
             if len(single_pond_data) != 0:
-                nonlocal title_date
-                if single_pond_data[0][0] > title_date:
-                    title_date = single_pond_data[0][0]
+                nonlocal latest_sample_date
+                if single_pond_data[0][0] > latest_sample_date:
+                    latest_sample_date = single_pond_data[0][0]
 
             # title subplot
             title_ax = plt.Subplot(fig, inner_plot[0,:])
@@ -1110,8 +1202,8 @@ class PondsOverviewPlots:
         # flatten title_labels for indexing from plot gridspec plot generation
         flat_title_labels = [label for item in title_labels for label in item]
 
-        # initialize title_date as a global variable to track the most recent date to print in the title
-        title_date = datetime.min
+        # initialize latest_sample_date as a global variable to track the most recent date to print in the title
+        latest_sample_date = datetime.min
 
         # Initialize main plot
         plt_width = 8.5
@@ -1132,15 +1224,28 @@ class PondsOverviewPlots:
                 ax = plt.Subplot(fig, pond_plot)
                 ax.axis('off')
                 if 'BLANK 11-6' in pond_name: # plot the color key in the first blank subplot
-                    legend_text = (
-                                    r'$\bf{Color\/\/key\/\/(latest\/\/EPA\/\/reading)}$:' "\n"
-                                    "0% - 1.99%:      Red\n"
-                                    "2% - 3.49%:      Yellow\n"
-                                    "3.5% and up:    Green\n"
-                                    "No EPA data:     Grey"
-                                   )
-                    t = ax.text(0.1,0.8,legend_text,ha='left', va='top', fontsize = 'x-large',
-                           bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
+                    # legend_text = (
+                    #                 r'$\bf{Color\/\/key\/\/(latest\/\/EPA\/\/reading)}$:' "\n"
+                    #                 "0% - 1.99%:      Red\n"
+                    #                 "2% - 3.49%:      Yellow\n"
+                    #                 "3.5% and up:    Green\n"
+                    #                 "No EPA data:     Grey"
+                    #                )
+                    # t = ax.text(0.1,0.8,legend_text,ha='left', va='top', fontsize = 'x-large',
+                    #        bbox=dict(facecolor='xkcd:bluegrey', alpha=0.5), multialignment='left')
+
+
+                    legend_data = [{'labels':{'Color key (latest measurement)': {'align': '1', 'weight': 'bold'}}},
+                                   {'labels':{'EPA %': {'align': '1', 'weight': 'underline'}}},
+                                   {'labels':{'0% - 1.99%'.center(50): {'align': '1'}}, 'fill_color': 'red'}, # use .center() to pad spacing for one row to make legend plot wider
+                                   {'labels':{'2% - 3.49%': {'align': '1'}}, 'fill_color': 'yellow'},
+                                   {'labels':{'3.5% and up': {'align': '1'}}, 'fill_color': 'mediumspringgreen'},
+                                   {'labels':{'No EPA data': {'align': '1'}}, 'fill_color': 'lightgrey'}
+                                  ]
+                    x_align = {'1': [1, 'center']}
+                                                                                                                                                                                                                        
+                    self.plot_legend(fig, ax, legend_data, x_align, y_spacing=0.15, y_align=0.8)
+                  
                 if 'BLANK 12-6' in pond_name: # plot the legend in the first blank subplot    
                     pass
                 elif 'BLANK 13-1' in pond_name:
@@ -1154,11 +1259,11 @@ class PondsOverviewPlots:
 
                 fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
 
-        title_date_formatted = title_date.strftime('%-m/%-d/%Y')
-        fig.suptitle(f'{plot_title}\nas of {title_date_formatted}', fontweight='bold', fontsize=16, y=0.905)
-
-        
+        # Add title to EPA plot
+        fig.suptitle(f'{plot_title} - {self.select_date.strftime("%-m/%-d/%Y")}', fontweight='bold',fontsize=16, y=0.905, va='bottom')
+        fig.text(0.75, 0.905, f'\nLatest sample date: {latest_sample_date.strftime("%-m/%-d/%y")}', transform=fig.transFigure, ha='center', va='bottom', fontsize='large')
+            
         if self.save_output:
-            out_filename = f'./output_files/{plot_title} {title_date.strftime("%Y-%m-%d")}.pdf'
+            out_filename = f'./output_files/{plot_title} {self.select_date.strftime("%Y-%m-%d")}.pdf'
             plt.savefig(out_filename, bbox_inches='tight')     
             return out_filename
