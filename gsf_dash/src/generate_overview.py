@@ -907,7 +907,7 @@ class PondsOverviewPlots:
                 fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
         
         # Update Suggested Harvests data
-        # first sort potential_harvests by column, then within each column (1, 2, 3, 4, 6, 8 if any ponds are active in them), by 'days since harvested' then 'harvestable mass', both in descending order
+        # first sort potential_harvests by column (numbered 1, 2, 3, 4, 6, 8 if any ponds are active in them), then within each column by 'days since harvested' then 'harvestable mass', both in descending order
         potential_harvests['data'] = dict(sorted(potential_harvests['data'].items(), key=lambda x: x[0]))
         for idx, col in enumerate(potential_harvests['data'].keys()):
             potential_harvests['data'][col] = sorted(potential_harvests['data'][col], key=lambda x: (x['Days Since Harvested'], x['Harvestable Mass']), reverse=True)                                                                                                                                                                                                                                                                                                       
@@ -920,15 +920,13 @@ class PondsOverviewPlots:
                 pond['Running Total Gallons'] = f'{tmp_gals:,.0f} gal'
                 pond['Running Total Mass'] = f'{tmp_mass:,} kg'
 
-                # update formatting of poatential_harvests to display
+                # update formatting of potential_harvests to display
                 pond['Drop To'] = f'{pond["Drop To"]}"'
                 pond['Days Since Harvested'] = f'{pond["Days Since Harvested"]} day{"s" if pond["Days Since Harvested"] != 1 else ""}'
                 pond['Harvestable Depth'] = f'{pond["Harvestable Depth"]}"' # set dict values normally since keys should now exist
                 pond['Harvestable Gallons'] = f'{pond["Harvestable Gallons"]:,.0f} gal'
                 pond['Harvestable Mass'] = f'{pond["Harvestable Mass"]:,} kg'
         
-        # add 'columns' values to potential_harvests dict, get list of keys from the first pond in 'data'
-        potential_harvests['columns'] = list(potential_harvests['data'][list(potential_harvests['data'].keys())[0]][0].keys())
         # add 'aggregates' to potential_harvests dict
         potential_harvests['aggregates'] = {'potential total mass': f'{potential_total_harvest_mass:,} kg', 'potential total volume': f'{potential_total_harvest_gals:,.0f} gallons'}
          
@@ -942,6 +940,13 @@ class PondsOverviewPlots:
     def plot_potential_harvests(self, overall_spacing=0.03): 
         potential_harvests_dict = self.potential_harvests_dict
         select_date = self.select_date
+
+        # add 'columns' values to potential_harvests dict, get list of keys from the first column/first pond in 'data'
+        if len(potential_harvests_dict.get('data', {})) > 0:
+            potential_harvests_dict['columns'] = list(potential_harvests_dict['data'][list(potential_harvests_dict['data'].keys())[0]][0].keys())
+        else:
+            potential_harvests_dict['columns'] = []
+
         
         def gen_fig(title=False):
             # Initialize plot
