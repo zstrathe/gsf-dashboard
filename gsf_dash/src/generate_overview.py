@@ -465,10 +465,17 @@ class PondsOverviewPlots:
                 else:
                     num_active_ponds_sm += 1
                 num_active_ponds += 1
+
+                # get most recent EPA value
+                try:
+                    epa_date = list(self.epa_data_dict[pond_name].keys())[0] # get 0 index since the epa data should be sorted by most-recent first
+                    epa_val = self.epa_data_dict[pond_name][epa_date]
+                except:
+                    epa_val = ''
                 
                 # get dataframe for individual pond for current date
                 date_single_pond_data = single_pond_data.loc[select_date] 
-                
+
                 # calculate data for pond subplot display
                 pond_data_afdw, pond_data_afdw_noncurrent_flag = current_or_prev_query(single_pond_data, 'AFDW (filter)', 1, return_noncurrent_flag=True)
                 pond_data_depth, pond_data_depth_noncurrent_flag = current_or_prev_query(single_pond_data, 'Depth', 1, return_noncurrent_flag=True)
@@ -477,7 +484,8 @@ class PondsOverviewPlots:
                 if pond_data_afdw_noncurrent_flag == 'noncurrent' or pond_data_depth_noncurrent_flag == 'noncurrent': 
                     nonlocal any_noncurrent_flag
                     any_noncurrent_flag = True
-                if (pond_data_afdw == 0 or pond_data_depth == 0) != True:
+                # calculate mass and harvestable amount if density and depth are both nonzero
+                if (pond_data_afdw != 0 or pond_data_depth != 0) == False:
                     pond_data_total_mass = int(afdw_depth_to_mass(pond_data_afdw, pond_data_depth, pond_name))
                     # calculate harvestable depth (in inches) based on depth and afdw and the target_topoff_depth & target_to_density global function parameters
                     # rounding down to nearest 1/8 inch
@@ -495,7 +503,7 @@ class PondsOverviewPlots:
                     # Add pond info to global counters/data for the entire farm
                     nonlocal total_mass_all
                     total_mass_all += pond_data_total_mass # add pond mass to the total_mass_all counter for entire farm
-                    if pond_data_afdw > harvest_density and pond_data_harvestable_depth > 0: # add these only if current pond density is greater than the global function parameter 'harvest_density'
+                    if pond_data_afdw > harvest_density and pond_data_harvestable_depth > 0 and epa_val >= 0.03: # add these only if current pond density is greater than the global function parameter 'harvest_density'
                         nonlocal potential_harvests, potential_total_harvest_mass, potential_total_harvest_gals
                         pond_column = pond_name[2:]
                         potential_harvests['data'].setdefault(pond_column, []) # use .setdefault methods to first populate dict key for column (if it doesn't already exist), and an empty list to collect data for each
@@ -550,13 +558,6 @@ class PondsOverviewPlots:
                     if comparison_operator == 'out-of-range':
                         if indicators_data[key] < threshold[0] or indicators_data[key] > threshold[1]:
                             pond_indicator_data.append([val[2], val[3]])
-                
-                # get most recent EPA value
-                try:
-                    epa_date = list(self.epa_data_dict[pond_name].keys())[0] # get 0 index since the epa data should be sorted by most-recent first
-                    epa_val = self.epa_data_dict[pond_name][epa_date]
-                except:
-                    epa_val = ''
                 
                 # set fill color 
                 if pond_data_afdw == 0:
@@ -969,7 +970,7 @@ class PondsOverviewPlots:
             #ax.minorticks_on()
             if title:
                 title_text1 = f'Potential Harvests - {str(select_date.strftime("%-m/%-d/%y"))}' 
-                title_text2 = ('\nponds with' + r'$\geq$' + f'0.50 AFDW, with estimated harvest depth to reach 0.40 AFDW after top off to 13"\n\n'+
+                title_text2 = ('\nponds with' + r'$\geq$' + '0.50 AFDW and' + r'$\geq$' + '3% EPA, with estimated harvest depth to reach 0.40 AFDW after top off to 13"\n\n' + 
                               f'Total estimated potential harvest mass: {potential_harvests_dict["aggregates"]["potential total mass"]}\n' +
                               f'Total estimated potential harvest volume: {potential_harvests_dict["aggregates"]["potential total volume"]}')
                 t1 = ax.text(0.5, 1, title_text1, ha='center', va='top', fontsize=14, weight='bold')
