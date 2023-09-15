@@ -952,7 +952,6 @@ class PondsOverviewPlots:
         else:
             potential_harvests_dict['columns'] = []
 
-        
         def gen_fig(title=False):
             # Initialize plot
             plt_width = 8.5

@@ -4,8 +4,12 @@ from office365.sharepoint.client_context import ClientContext
 from os.path import getsize, isfile
 import re
 from . import load_setting, EmailHandler
+import sqlite3
 
 class Dataloader:
+    _db_conn = sqlite3.connect('gsf_data.db')
+    db_c = _db_conn.cursor()
+    
     def __init__(self, select_date, run=True):
         self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
         self.ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
@@ -25,7 +29,7 @@ class Dataloader:
             processing_datafile = self.download_data('processing_data_info')
             processing_dataframe = self.load_processing_data(processing_datafile)
             self.outdata = {'scorecard_dataframe': scorecard_dataframe, 'epa_data_dict': epa_data_dict, 'active_dict': active_dict, 'processing_dataframe': processing_dataframe}
- 
+    
     def download_data(self, data_item_setting):
         sharepoint_site, file_url, download_path, expected_min_filesize, print_label = load_setting(data_item_setting).values()
         if sharepoint_site not in self.sharepoint_connections.keys():
@@ -54,10 +58,10 @@ class Dataloader:
             print(f'DOWNLOAD ERROR: {print_label}: filesize less than expected!')
             return False
 
-    def get_data_from_email(self, email_setting):
+    def get_data_from_email(self, email_setting: str):
         print(**load_setting(email_setting))
         return EmailHandler().get_latest_email_attachment_from_folder(**load_setting(email_setting))
-        
+            
     def load_scorecard_data(self, excel_filename):
         ponds_list = self.ponds_list
         
@@ -74,7 +78,7 @@ class Dataloader:
                 print('Failed to load data for pond:', i)
 
         # clean the pond data (convert data from string to datetime, set date as index, drop empty columns   
-        updated_ponds = {} # dict for storing cleaned data
+        updated_ponds_data = {} # dict for storing cleaned data
         for key in enumerate(all_ponds_data.keys()):
             df = all_ponds_data[key[1]]
             df = df.rename(columns={df.columns[0]:'date'})
@@ -82,9 +86,9 @@ class Dataloader:
             df = df.dropna(subset=['date']) # drop rows that don't contain a date/valid date
             df = df.set_index(df['date'].name) # set date column as index
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
-            updated_ponds[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
+            updated_ponds_data[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
         print('Scorecard data loaded!')
-        return updated_ponds # return the cleaned data dict
+        return updated_ponds_data # return the cleaned data dict
     
     def load_processing_data(self, excel_filename):
         print('Loading processing data')
