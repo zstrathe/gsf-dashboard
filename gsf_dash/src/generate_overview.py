@@ -23,7 +23,7 @@ class PondsOverviewPlots:
 
     # function to plot outlined legend boxes, using a dict of labels/data, and a separate dict of x_alignments (see examples of dict structure in calls to this function)
     def plot_legend(self, fig, ax, legend_data, x_align, y_spacing, y_align=0.9):
-        y_align = y_align # start y-coord for plotting legend
+        y_align = y_align # start upper y-coord for plotting legend
         max_coords = [1,1,0,0] #  initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
         data_rows_x_bound = [1,0]
         data_rows_y_bounds = [] 
@@ -337,100 +337,6 @@ class PondsOverviewPlots:
             subplot_ax.get_xaxis().set_ticks([])
             subplot_ax.get_yaxis().set_ticks([])
             fig.add_subplot(subplot_ax)
-         
-        # function to plot outlined legend boxes, using a dict of labels/data, and a separate dict of x_alignments (see examples of dict structure in calls to this function)
-        # def plot_legend(legend_data, x_align, y_spacing, y_align=0.9):
-        #     y_align = y_align # start y-coord for plotting legend
-        #     max_coords = [1,1,0,0] #  initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
-        #     data_rows_x_bound = [1,0]
-        #     data_rows_y_bounds = [] 
-        #     indicator_plots = []
-        #     for row in legend_data:
-        #         row_y_bound = [1,0]
-        #         row_fill_color = 'white'
-        #         if 'fill_color' in row:
-        #             row_fill_color = row['fill_color']
-
-        #         for idx, (label, properties) in enumerate(row['labels'].items()):
-        #             underline = False
-        #             text_weight = 'normal'
-        #             text_color = 'black'
-
-        #             if 'weight' in properties:
-        #                 if properties['weight'] == 'underline': # check if 'underline' option since it's not an option in matplotlib and needs to be added after text with an annotation using text bounding box coords
-        #                     underline = True
-        #                 elif properties['weight'] == 'bold': 
-        #                     text_weight = 'bold'
-
-        #             if 'color' in properties:
-        #                 text_color = properties['color']
-
-        #             if 'indicator_fill' in properties: # plot indicators instead of normal text
-        #                 # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
-        #                 # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
-        #                 ax_x0, ax_y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
-        #                 ax_x1, ax_y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
-        #                 ax_dx = ax_x1 - ax_x0
-        #                 ax_dy = ax_y1 - ax_y0
-        #                 ax_maxd = max(ax_dx, ax_dy)
-        #                 circle_width = .07 * ax_maxd / ax_dx
-        #                 circle_height = .07 * ax_maxd / ax_dy
-
-        #                 # plot indicator
-        #                 t = ax.add_patch(Ellipse((x_align[properties['align']][0], y_align), circle_width, circle_height, color=properties['indicator_fill'], fill=properties['indicator_fill'], clip_on=False))
-        #                 ax.text(x_align[properties['align']][0], y_align, label, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7, clip_on=False)
-
-        #             else:
-        #                 t = ax.text(x_align[properties['align']][0], y_align, label, ha = x_align[properties['align']][1], va = 'center', weight=text_weight, color=text_color)
-
-        #             # get bounding box of plotted items
-        #             bb = t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
-
-        #             if underline:
-        #                 ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
-
-        #             # update the max coord boundaries for the rows that are assigned a color
-        #             if row_fill_color != 'white':  
-        #                 #print(label, bb)
-        #                 if 'excl_color' not in properties: # add option of excluding a row item from being colored
-        #                     if bb.x0 < data_rows_x_bound[0]:
-        #                         data_rows_x_bound[0] = bb.x0
-        #                     if bb.x1 > data_rows_x_bound[1]:
-        #                         data_rows_x_bound[1] = bb.x1
-        #                     if bb.y0 < row_y_bound[0]:
-        #                         row_y_bound[0] = bb.y0
-        #                     if bb.y1 > row_y_bound[1]:
-        #                         row_y_bound[1] = bb.y1
-
-        #             # update max_coords for bounding box around legend and for x-bounds of rows that will be filled with color
-        #             if bb.x0 < max_coords[0]:
-        #                 max_coords[0] = bb.x0
-        #             if bb.y0 < max_coords[1]:
-        #                 max_coords[1] = bb.y0
-        #             if bb.x1 > max_coords[2]:
-        #                 max_coords[2] = bb.x1
-        #             if bb.y1 > max_coords[3]:
-        #                 max_coords[3] = bb.y1
-
-        #         y_align -= y_spacing # decrease y coord for each line for spacing       
-
-        #         if row_fill_color != 'white':
-        #             data_rows_y_bounds.append((row_y_bound,row_fill_color))
-
-        #     #print('rows x-bound:', data_rows_x_bound)    
-        #     #print('row y-bounds:', data_rows_y_bounds)
-            
-        #     # plot colored rectangle for corresponding row
-        #     row_box_padding = 0.01
-        #     for row_y in data_rows_y_bounds:
-        #         ax.add_patch(Rectangle((data_rows_x_bound[0]-row_box_padding,row_y[0][0]-row_box_padding),data_rows_x_bound[1]-data_rows_x_bound[0]+row_box_padding*2,row_y[0][1]-row_y[0][0]+row_box_padding*2,linewidth=0,edgecolor=None,facecolor=row_y[1], clip_on=False))
-            
-        #     # plot color filled box around legend text
-        #     box_padding = 0.03
-        #     box_xy = (max_coords[0]-box_padding, max_coords[1]-box_padding)
-        #     box_width = max_coords[1]-max_coords[0]
-        #     ax.add_patch(Rectangle((max_coords[0]-box_padding,max_coords[1]-box_padding),max_coords[2]-max_coords[0]+box_padding*2,max_coords[3]-max_coords[1]+box_padding*2,linewidth=1,edgecolor='black',facecolor='none',clip_on=False))
-
         
         # function to plot each pond to ensure that data for each plot is kept within a local scope
         def plot_each_pond(fig, pond_plot, pond_name, select_date):
@@ -484,8 +390,9 @@ class PondsOverviewPlots:
                 if pond_data_afdw_noncurrent_flag == 'noncurrent' or pond_data_depth_noncurrent_flag == 'noncurrent': 
                     nonlocal any_noncurrent_flag
                     any_noncurrent_flag = True
+
                 # calculate mass and harvestable amount if density and depth are both nonzero
-                if (pond_data_afdw != 0 or pond_data_depth != 0) == False:
+                if all(dat != 0 for dat in (pond_data_afdw, pond_data_depth)):
                     pond_data_total_mass = int(afdw_depth_to_mass(pond_data_afdw, pond_data_depth, pond_name))
                     # calculate harvestable depth (in inches) based on depth and afdw and the target_topoff_depth & target_to_density global function parameters
                     # rounding down to nearest 1/8 inch
@@ -523,7 +430,7 @@ class PondsOverviewPlots:
                     pond_data_total_mass = 0
                     pond_data_harvestable_depth = 0
                     pond_data_harvestable_mass = 0
-                
+
                 # Query pests data for each pond
                 indicators_data = date_single_pond_data[['pH', 'Rotifers ','Attached FD111','Free Floating FD111', 'Golden Flagellates', 'Diatoms', 
                                     'Tetra','Green Algae']].apply(pd.to_numeric, errors='coerce').fillna(0)
