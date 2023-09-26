@@ -1,8 +1,9 @@
 import pandas as pd
 import functools
 import re
-import sqlite3
+#import sqlite3
 import sqlalchemy
+import math
 from dateutil.rrule import rrule, DAILY 
 from datetime import datetime, date
 from pathlib import Path
@@ -11,7 +12,7 @@ from office365.sharepoint.client_context import ClientContext
 from . import load_setting, EmailHandler
 from .ms_account_connect import MSAccount, M365ExcelFileHandler
 #from .db_utils import init_db_table, insert_replace_row_db_table, get_db_table_columns
-from .db_utils import get_db_table_columns, init_db_table, get_primary_keys, delete_existing_rows_ponds_data
+from .db_utils import * #get_db_table_columns, init_db_table, get_primary_keys, delete_existing_rows_ponds_data
 
 class Dataloader:
     _db_engine = sqlalchemy.create_engine("sqlite:///db/gsf_data.db", echo=False) # initialize sqlalchemy engine / sqlite database
@@ -74,8 +75,9 @@ class Dataloader:
         This method looks through "Daily Data" sharepoint directory organized by: YEAR --> MM_MONTH (ex: '04-April') --> FILE ("yyyymmdd Daily Data.xlsx")
 
         params:
-            - specify_date: - date to get daily data for (defaults to self.select_date if not specified)
-                            - must be in "yyyy-mm-dd" format
+        --------
+        - specify_date: - date to get daily data for (defaults to self.select_date if not specified)
+                        - must be in "yyyy-mm-dd" format
             
         RETURNS -> pd.ExcelFile object (if successful download) or None (if failure)
         '''
@@ -107,43 +109,47 @@ class Dataloader:
                         print(f'COULD NOT FIND DAILY DATA FILE FOR {datetime.strftime(specify_date, "%m/%d/%Y")}!')
                         return None
 
-    def rebuild_daily_data_db(self, from_date: str, to_date: str, db_name: str, table_name: str) -> None:
+    def rebuild_daily_data_db(self, start_date: str, end_date: str, db_name: str, table_name: str = 'ponds_data') -> None:
         ''' 
         Method to fully re-build the daily data database from "from_date" to the  "to_date"
         if test_db is specified, then write to that database instead of the normal db file
-        from_date: specify by "YYYY-MM-DD" - earliest possible date with data is 2017-03-15
-        to_date: specify by "YYYY-MM-DD"
+        start_date: specify by "YYYY-MM-DD" - earliest possible date with data is 2017-03-15
+        end_date: specify by "YYYY-MM-DD"
         '''
         db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False) # initialize sqlalchemy engine / sqlite database
-        init_db_table(db_engine, table_name)
+        init_db_table(db_engine, table_name) # init 'ponds_data' table (if using default param)
+        init_db_table(db_engine, f'{table_name}_calculated') # init 'ponds_data_calculated' table
+        init_db_table(db_engine, f'{table_name}_expenses') # init 'ponds_data_expenses' table
         
-        start_date = datetime.strptime(from_date, "%Y-%m-%d")
-        end_date = datetime.strptime(to_date, "%Y-%m-%d")
+        start_date = datetime.strptime(start_date, "%Y-%m-%d")
+        end_date = datetime.strptime(end_date, "%Y-%m-%d")
+
         removed_cols_list = []
-        
         for d in rrule(DAILY, dtstart=start_date, until=end_date):
             print('\n\nLoading', datetime.strftime(d, "%m/%d/%Y"))
-           # file_path = self.download_daily_data_file(specify_date=d.strftime('%Y-%m-%d'))
-           # print('downloaded...loading into db...')
-           # if file_path != None: # file_path will be None if download failed
-            [removed_cols_list.append(removed_col) for removed_col in self.load_daily_data(db_name=db_name, specify_date=d, return_removed_cols=True) if removed_col not in removed_cols_list ]
-            # #print('loaded...removing file...')
-            # file_path.unlink() # delete file
+            [removed_cols_list.append(removed_col) for removed_col in self.load_daily_data(db_engine=db_engine, specify_date=d, return_removed_cols=True) if removed_col not in removed_cols_list ]
         print('Finished building DB!!')
         print('Removed columns:', removed_cols_list)
-        
-    def load_daily_data(self, specify_date: datetime, db_engine: sqlalchemy.Engine, table_name='ponds_data', return_removed_cols=False):  # daily_data_excel_file_path: Path
+
+    def load_daily_data_prev_n_days(self, prev_num_days_to_load: int, specify_date: datetime = None, **kwargs):
+        # load class 'select_date' if custom parameter not provided
+        if not specify_date:
+            specify_date = self.select_date
+        start_date = specify_date - timedelta(days=prev_num_days_to_load)
+        for d in rrule(DAILY, dtstart=start_date, until=specify_date):
+            self.load_daily_data(specify_date=d, **kwargs)
+    
+    def load_daily_data(self, specify_date: datetime, db_engine: sqlalchemy.Engine = None, table_name='ponds_data', return_removed_cols=False):  # daily_data_excel_file_path: Path
         '''
         Load the daily data file path, must be an excel file!
         Data is indexed by pond_name in multiple sheets within the excel file
-        This function combines data between all sheets into single dataframe, with multiindex of Date and Pond
+        This function combines data between all sheets into single dataframe and loads into database 
+
+        TODO: load "Comments" and "Split Innoculum" data from scorecard file
         '''
-        # if not db_name:
-        #     print('Test: using class db engine!')
-        #     db_engine = self._db_engine
-        # else:
-        #     print('Test: using specified db engine!')
-        #     db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
+        # load class _db_engine if custom enginee parameter not provided
+        if not db_engine:
+            db_engine = self._db_engine
             
         excel_file = self.download_daily_data_file(specify_date=specify_date.strftime('%Y-%m-%d'))
         if excel_file == None: # file doesn't exist or download error
@@ -273,98 +279,182 @@ class Dataloader:
         
         # Delete pre-existing duplicate rows from database table (so that using pd.to_sql() with 'append' mode will not add duplicated rows when re-loading data)
         print('Deleting existing rows from table...')
-        delete_existing_rows_ponds_data(db_engine, table_name, joined_df.to_dict(orient='records'))
+        delete_existing_rows_ponds_data(db_engine, table_name, joined_df)
         
         # Use DataFrame.to_sql() to insert data into database table
         joined_df.to_sql(name=table_name, con=db_engine, if_exists='append', index=False)
         print(f'Updated DB for {datetime.strftime(specify_date, "%m/%d/%Y")}!')
 
+        # call function to perform calculations from daily data (stored in 'ponds_data_calculated' table)
+        self.daily_data_calculations(check_date=specify_date, db_engine=db_engine)
+        self.chemical_cost_calculations(check_date=specify_date, db_engine=db_engine)
+        
         if return_removed_cols:
             return all_removed_cols
         else:
             return None
           
-    def daily_data_calculations(self, data_sets: list({'pond_name': pd.DataFrame})):
+    def daily_data_calculations(self, check_date: datetime, db_engine: sqlalchemy.Engine | None = None, data_table_name: str = 'ponds_data', out_table_name: str = 'ponds_data_calculated') -> None:
         '''
         Method to generate calculated fields from daily data that has been loaded
           - INPUT DATA: 
               - List of:
                   Dict with keys by pond name and data (i.e., {'0101': pd.DataFrame, '0201': pd.DataFrame, ...})
         THESE CALCULATIONS SHOULD ONLY RELY ON ONE DAY OF DATA (i.e., cannot calculate growth, time-series averages, etc)
+
+        OUTPUT:
+        ---------
+        database columns appended to "table_name" (default: 'ponds_data_calculated')
+             - 'Date': date
+             - 'PondID': pond_id 
+             - 'calc_mass': mass (in kg) calculated from density and depth of pond
+             - 'calc_mass_nanno_corrected': calculated mass multiplied by measured "% Nanno" measurement 
+             - 'harvestable_depth_inches': harvestable depth (in inches) based on TARGET_TOPOFF_DEPTH, TARGET_DENSITY_AFTER_TOPOFF, MIN_HARVEST_DENSITY variables defined below
+             - 'harvestable_gallons': harvestable_depth_inches converted into gallons 
+             - 'harvestable_mass': harvestable_depth_inches converted into mass (in kg)
+             - 'harvestable_mass_corrected': harvestable_mass multiplied by "% Nanno" measurement
         '''
         # helper function to convert density & depth to mass (in kilograms)
-        def afdw_depth_to_mass(afdw, depth, pond_name):
+        def afdw_depth_to_mass(afdw: int|float, depth: int|float, pond_id: str):
+            '''
+            params: 
+            - afdw: density in g/L
+            - depth: depth in inches
+            - pond_id: id number of pond (i.e., '0401')
+            '''
             depth_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
             # for the 6 and 8 columns, double the depth to liters conversion because they are twice the size
-            if pond_name[-2:] == '06' or pond_name[-2:] == '08': 
+            if pond_id[-2:] == '06' or pond_id[-2:] == '08': 
                 depth_to_liters *= 2
             # calculate and return total mass (kg)
-            return (afdw * depth_to_liters * depth) / 1000
-        
-        # Initialize variables for aggregations 
-        total_mass_all = 0 # total mass for entire farm (regardless of density)
-        total_harvestable_mass = 0 # all available mass with afdw > target_to_density
-        potential_total_harvest_mass = 0 # all harvestable mass with resulting afdw > target_to_density but only ponds with current afdw > harvest_density
-        potential_total_harvest_gals = 0 # potential harvest_mass in terms of volume in gallons
-        potential_harvests = {'columns': [], 'data': {}, 'aggregates': {}} # dict to store calculated harvest depths for ponds with density >= harvest_density
-        num_active_ponds = 0 # number of active ponds (defined by the plot_ponds().check_active() function)
-        num_active_ponds_sm = 0 # number of active 1.1 acre ponds
-        num_active_ponds_lg = 0 # number of active 2.2 acre ponds
+            return round((afdw * depth_to_liters * depth) / 1000, 2)
 
-        #check if pond is in the '06' or '08' column by checking the last values in name
-        if pond_name[2:] == '06' or pond_name[2:] == '08':
-             num_active_ponds_lg += 1
-        else:
-            num_active_ponds_sm += 1
-        num_active_ponds += 1
-        
-        # get dataframe for individual pond for current date
-        date_single_pond_data = single_pond_data.loc[select_date] 
-        
-        # calculate data for pond subplot display
-        pond_data_afdw, pond_data_afdw_noncurrent_flag = current_or_prev_query(single_pond_data, 'AFDW (filter)', 1, return_noncurrent_flag=True)
-        pond_data_depth, pond_data_depth_noncurrent_flag = current_or_prev_query(single_pond_data, 'Depth', 1, return_noncurrent_flag=True)
-        pond_data_depth = math.floor(pond_data_depth*8)/8 # round depth to nearest 1/8 inches (data should already be input this way, but this ensures that data entry errors are corrected)
-        # update 'any_noncurrent_flag' var to True if either AFDW or Depth is flagged as noncurrent, for use with adding explanation note to the plot when this flag is true
-        if pond_data_afdw_noncurrent_flag == 'noncurrent' or pond_data_depth_noncurrent_flag == 'noncurrent': 
-            any_noncurrent_flag = True
-        if (pond_data_afdw == 0 or pond_data_depth == 0) != True:
-            pond_data_total_mass = int(afdw_depth_to_mass(pond_data_afdw, pond_data_depth, pond_name))
-            # calculate harvestable depth (in inches) based on depth and afdw and the target_topoff_depth & target_to_density global function parameters
-            # rounding down to nearest 1/8 inch
-            pond_data_harvestable_depth = math.floor((((pond_data_depth * pond_data_afdw) - (target_topoff_depth * target_to_density)) / pond_data_afdw)*8)/8
-            if pond_data_harvestable_depth < 0: 
-                pond_data_harvestable_depth = 0
-            # calculate the depth to harvest pond to (i.e., the resulting depth after it has been harvested with the pond_data_harvestable_depth number of inches)   
-            pond_data_target_depth_harvest_to = pond_data_depth - pond_data_harvestable_depth
-            # calculate harvestable volume (in gallons) based on harvestable depth and conversion factor (35,000) to gallons. Double for the '06' and '08' column ponds since they are double size
-            pond_data_harvestable_gallons = pond_data_harvestable_depth * 35000
-            if pond_name[-2:] == '06' or pond_name[-2:] == '08':
-                pond_data_harvestable_gallons *= 2
-            pond_data_harvestable_mass = int(afdw_depth_to_mass(pond_data_afdw, pond_data_harvestable_depth, pond_name))
+        # load the default class database engine if not specified (should only need to be specified for testing)
+        if not db_engine: 
+            db_engine = self._db_engine
 
-            # Add pond info to global counters/data for the entire farm
-            total_mass_all += pond_data_total_mass # add pond mass to the total_mass_all counter for entire farm
-            if pond_data_afdw > harvest_density and pond_data_harvestable_depth > 0: # add these only if current pond density is greater than the global function parameter 'harvest_density'
-                pond_column = pond_name[2:]
-                potential_harvests['data'].setdefault(pond_column, []) # use .setdefault methods to first populate dict key for column (if it doesn't already exist), and an empty list to collect data for each
-                tmp_dict = {}
-                tmp_dict['Pond Number'] = pond_name
-                tmp_dict['Drop To'] = pond_data_target_depth_harvest_to
-                tmp_dict['Days Since Harvested'] = pond_days_since_harvest
-                tmp_dict['Harvestable Depth'] = pond_data_harvestable_depth 
-                tmp_dict['Harvestable Gallons'] = pond_data_harvestable_gallons
-                tmp_dict['Harvestable Mass'] = pond_data_harvestable_mass
-                potential_harvests['data'][pond_column].append(tmp_dict)
+        check_date = check_date.strftime("%Y-%m-%d") # convert datetime to string for sql query
+        data_table = load_table(db_engine, data_table_name)
+        
+        # variables for calculating harvestable mass 
+        # based on min target density to begin harvesting, target density after harvesting and topping off with water, and target depth after topping off with water
+        TARGET_TOPOFF_DEPTH = 13
+        TARGET_DENSITY_AFTER_TOPOFF = 0.4
+        MIN_HARVEST_DENSITY = 0.5
+
+        calcs_df = pd.DataFrame()
+        
+        with db_engine.begin() as conn:
+            afdw_depth_data = conn.execute(sqlalchemy.select(data_table.c["PondID", "Filter AFDW", "Depth", "% Nanno"]).where(data_table.c["Date"] == check_date)).fetchall()
+
+        for (pond_id, afdw, depth, pct_nanno) in afdw_depth_data:
+            
+            if any(x in (0, None) for x in (afdw, depth)):
+           # if None in (afdw, depth):
+                print(f'Incomplete data, skipping {pond_id} for {check_date}')
+                # add new blank row for pond_id
+                calcs_df = calcs_df.append({'PondID': pond_id}, ignore_index=True)
+            else:
+                estimated_mass = afdw_depth_to_mass(afdw, depth, pond_id)
                 
-                # update total potential harvest amounts
-                potential_total_harvest_mass += pond_data_harvestable_mass
-                potential_total_harvest_gals += pond_data_harvestable_gallons
-        else:
-            pond_data_total_mass = 0
-            pond_data_harvestable_depth = 0
-            pond_data_harvestable_mass = 0
-    
+                # calculate harvestable depth of pond (in inches), rounding down to nearest 1/8 inch
+                harvestable_depth_inches = math.floor((((depth * afdw) - (TARGET_TOPOFF_DEPTH * TARGET_DENSITY_AFTER_TOPOFF)) / afdw)*8)/8
+                if harvestable_depth_inches < 0:
+                    harvestable_depth_inches = 0
+                    
+                # calculate harvestable volume (in gallons) based on harvestable depth and conversion factor (35,000) to gallons. Double for the '06' and '08' column ponds since they are double size
+                harvestable_gallons = harvestable_depth_inches * 35000 
+                if pond_id[-2:] == '06' or pond_id[-2:] == '08':
+                    harvestable_gallons *= 2
+
+                # calculate harvestable mass using the harvestable_depth_inches calculation
+                harvestable_mass = afdw_depth_to_mass(afdw, harvestable_depth_inches, pond_id)
+
+                if type(pct_nanno) in (float, int, complex):
+                    estimated_mass_nanno_corrected = round(estimated_mass * (pct_nanno/100),2)
+                    harvestable_mass_nanno_corrected = round(harvestable_mass * (pct_nanno/100), 2)
+                else:
+                    estimated_mass_nanno_corrected = 0
+                    harvestable_mass_nanno_corrected = 0
+
+                # use dict comprehension to filter: to set <=0 values equal to None in numeric fields
+                append_dict = {col_name: (value if (type(value) not in (int, float, complex) or value > 0) else None) for (col_name, value) in 
+                                            {'PondID': pond_id, 
+                                            'calc_mass': estimated_mass, 
+                                            'calc_mass_nanno_corrected': estimated_mass_nanno_corrected, 
+                                            'harvestable_depth_inches': harvestable_depth_inches, 
+                                            'harvestable_gallons': harvestable_gallons, 
+                                            'harvestable_mass': harvestable_mass,
+                                            'harvestable_mass_nanno_corrected': harvestable_mass_nanno_corrected}.items()}
+                calcs_df = calcs_df.append(append_dict, ignore_index=True)
+
+                # # append row of calculated data to the output dataframe
+                # calcs_df2 = pd.DataFrame({'PondID': pond_id, 
+                #                           'calc_mass': estimated_mass, 
+                #                           'calc_mass_nanno_corrected': estimated_mass_nanno_corrected, 
+                #                           'harvestable_depth_inches': harvestable_depth_inches, 
+                #                           'harvestable_gallons': harvestable_gallons, 
+                #                           'harvestable_mass': harvestable_mass,
+                #                           'harvestable_mass_nanno_corrected': harvestable_mass_nanno_corrected}, index=[0])
+                # print(calcs_df2)
+                # calcs_df = calcs_df.join(calcs_df2, on='PondID') # join df containing all PondID's with calculated data
+                #calcs_df.loc[calcs_df['PondID'] == pond_id] = {'PondID': pond_id, 'calc_mass': estimated_mass, 'harvestable_depth_inches': harvestable_depth_inches, 'harvestable_gallons': harvestable_gallons, 'harvestable_mass': harvestable_mass}
+                #calcs_df = calcs_df.append({'PondID': pond_id, 'calc_mass': estimated_mass, 'harvestable_depth_inches': harvestable_depth_inches, 'harvestable_gallons': harvestable_gallons, 'harvestable_mass': harvestable_mass}, ignore_index=True)
+
+        # add date column to calcs_df to use for composite key (date, pond_id), use insert() method to put col at beginning 
+        calcs_df.insert(loc=0, column='Date', value=check_date)
+  
+        # delete the existing rows with composite key of (Date, PondID), since using df.to_sql() will just append rows without any option to update
+        delete_existing_rows_ponds_data(db_engine=db_engine, table_name=out_table_name, update_data_df=calcs_df)
+        
+        # add df to sql db
+        # TODO: add foreign key to ref to "ponds_data" db???
+        calcs_df.to_sql(name=out_table_name, con=db_engine, if_exists='append', index=False)
+
+    def chemical_cost_calculations(self, check_date: datetime, db_engine: sqlalchemy.Engine | None = None, data_table_name = 'ponds_data', out_table_name: str = 'ponds_data_expenses') -> None:
+        '''
+        Method to calculate estimated costs from consumed chemicals and store in db_table
+        '''
+        # load the default class database engine if not specified (should only need to be specified for testing)
+        if not db_engine: 
+            db_engine = self._db_engine
+
+        check_date = check_date.strftime("%Y-%m-%d") # convert datetime to string for sql query
+        data_table = load_table(db_engine, data_table_name)
+
+        # hardcode costs - TEMPORARY!!
+        chem_costs = {
+            'uan-32': {'uom': 'gal', 'cost': 2.08, 'data_column': 'Volume UAN-32 Added', 'out_column': 'uan32_cost'},
+            'fertilizer-10-34': {'uom': 'gal', 'cost': 4.25, 'data_column': 'Volume 10-34 Added', 'out_column': 'fert1034_cost'},
+            'bleach': {'uom': 'gal', 'cost': 3.15, 'data_column': 'Volume Bleach Added', 'out_column': 'bleach_cost'},
+            #'co2': {'uom': 'lb', 'cost': 0.15, 'data_column': '', 'out_column': 'co2_cost'},  DON'T YET HAVE A METHOD OF SPLITTING CO2 COSTS PER POND / IMPLEMENT LATER
+            'trace': {'uom': 'gal', 'cost': 1, 'data_column': 'Volume Trace Added', 'out_column': 'trace_cost'},
+            'iron': {'uom': 'gal', 'cost': 1, 'data_column': 'Volume Iron Added', 'out_column': 'iron_cost'},
+            'cal-hypo': {'uom': 'kg', 'cost': 0.78, 'data_column': 'kg Cal Hypo Added', 'out_column': 'cal_hypo_cost'},
+            'benzalkonium': {'uom': 'gal', 'cost': 1, 'data_column': 'Volume Benzalkonium Added', 'out_column': 'benzalkonium_cost'}
+                }
+
+        # query the chemical usage amounts from db
+        data_col_names = ['Date', 'PondID']
+        [data_col_names.append(chem_costs[c]['data_column']) for c in chem_costs.keys()]
+        with db_engine.begin() as conn:
+            query_data = conn.execute(sqlalchemy.select(*[data_table.c[col] for col in data_col_names]).where(data_table.c["Date"] == check_date)).fetchall()
+        data_df = pd.DataFrame(query_data, columns=data_col_names).fillna(0)
+        
+        expenses_col_names = [chem_costs[c]['out_column'] for c in chem_costs.keys()]
+        cost_df = pd.DataFrame(None, columns=expenses_col_names)
+        cost_df[['Date', 'PondID']] = data_df[['Date', 'PondID']]
+        for (chem_name_key, vals) in chem_costs.items():
+            data_column = vals['data_column']
+            exp_column = vals['out_column']
+            cost_df[exp_column] = data_df[data_df['PondID'] == cost_df['PondID']][data_column] * vals['cost']
+                    
+        # delete the existing rows with composite key of (Date, PondID), since using df.to_sql() will just append rows without any option to update
+        delete_existing_rows_ponds_data(db_engine=db_engine, table_name=out_table_name, update_data_df=cost_df)
+
+        # append df to database table
+        cost_df.to_sql(name=out_table_name, con=db_engine, if_exists='append', index=False)
+
     def calculate_growth(pond_data_df, select_date, num_days, remove_outliers, data_count_threshold=2, weighted_stats_for_outliers=True):
         '''
         NEW **** MOVED TO DATALOADER, UTILIZE DATABASE TO QUERY/CALCULATE THIS?? ****
@@ -726,7 +816,8 @@ class Dataloader:
             tmp_list.append(process_excel_file(excel_filename))
         print('EPA data loaded!')
         return merge_epa_data(tmp_list[0], tmp_list[1]) 
-    
+        
+        
     # helper function to check if a pond has data from prior n-days from the selected date 
     # checking if there is data in the 'Fo' column up to n-days (num_days_prior)
     def generate_active_dict(self, pond_scorecard_data, num_days_prior):

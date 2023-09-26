@@ -27,9 +27,11 @@ def main(argv):
     if args.test_run:
         print('RUNNING AS TEST')
     
-    # check if date argument is valid, use try/except clause with datetime.strptime because it will generate an error with invalid date
+    # check if date argument is valid, use try/except clause with datetime.strptime because it will generate an error if an invalid date is provided
     try:
-        date_check = datetime.strptime(args.date, '%Y-%m-%d')
+        # store date as a datetime object 
+        ### TODO convert all functions to use datetime, only parse string in this main function!!
+        date_dt = datetime.strptime(args.date, '%Y-%m-%d')
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         invalid_date = args.date
@@ -41,20 +43,42 @@ def main(argv):
     #     if not (args.target_density > 0 and args.target_density < 1):
     #         failure_notify_email_exit("ERROR: target density (AFDW) should be between 0 and 1")
     
-    # load data
+    '''
+    LOAD DATA
+    '''
     try:
         datadict = Dataloader(args.date).outdata
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error downloading or loading data', tb)
-        
-    # plot Ponds Overview and get output filenames
+
+    # TEMPORARY INTEGRATION OF NEW DATABASE LOADING METHODS
+    try:
+        from src.dataloader_NEW import Dataloader as Dataloader_NEW
+        db_dataloader = Dataloader_NEW(args.date) # NEED TO UPDATE TO USE datetime as date argument!!!
+        db_dataloader.load_daily_data_prev_n_days(prev_num_days_to_load=5, specify_date=date_dt)
+    except Exception as ex:
+        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
+        failure_notify_email_exit(f'Error with loading daily data into db!', tb)
+    
+    '''
+    GENERATE PLOTS
+     - returns output filenames
+    '''
     try:
         output_filenames = PondsOverviewPlots(args.date, **datadict).output_filenames
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error running pond overview script', tb)
-        
+
+    # TEMPORARY INTEGRATION OF NEW PLOT OF EXPENSES USING MORE MODULAR CLASS METHODS
+    try:
+        from src.generate_overview_abstractclasses import ExpenseReport
+        output_filenames.insert(1, ExpenseReport(report_date=date_dt).run())
+    except Exception as ex:
+        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
+        failure_notify_email_exit(f'Error running expense report!', tb)
+    
     print('Emailing message with attachment...')
     
     if args.test_run == False:
