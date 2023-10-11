@@ -114,7 +114,7 @@ class PondsOverviewPlots:
         box_width = max_coords[1]-max_coords[0]
         ax.add_patch(Rectangle((max_coords[0]-box_padding,max_coords[1]-box_padding),max_coords[2]-max_coords[0]+box_padding*2,max_coords[3]-max_coords[1]+box_padding*2,linewidth=1,edgecolor='black',facecolor='none',clip_on=False))
     
-    def plot_scorecard(self, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, plot_title='Pond Health Overview'): 
+    def plot_scorecard(self, target_to_density=0.4, target_topoff_depth=13, harvest_density=0.5, harvest_epa=3.00, plot_title='Pond Health Overview'): 
         print('Plotting ponds overview...', flush=True)
     
         select_date = self.select_date
@@ -377,7 +377,7 @@ class PondsOverviewPlots:
                     epa_date = list(self.epa_data_dict[pond_name].keys())[0] # get 0 index since the epa data should be sorted by most-recent first
                     epa_val = self.epa_data_dict[pond_name][epa_date]
                 except:
-                    epa_val = ''
+                    epa_val = None
                 
                 # get dataframe for individual pond for current date
                 date_single_pond_data = single_pond_data.loc[select_date] 
@@ -410,7 +410,7 @@ class PondsOverviewPlots:
                     # Add pond info to global counters/data for the entire farm
                     nonlocal total_mass_all
                     total_mass_all += pond_data_total_mass # add pond mass to the total_mass_all counter for entire farm
-                    if pond_data_afdw > harvest_density and pond_data_harvestable_depth > 0 and epa_val >= 0.03: # add these only if current pond density is greater than the global function parameter 'harvest_density'
+                    if pond_data_afdw > harvest_density and pond_data_harvestable_depth > 0 and epa_val >= harvest_epa: # add these only if current pond density is greater than the global function parameter 'harvest_density'
                         nonlocal potential_harvests, potential_total_harvest_mass, potential_total_harvest_gals
                         pond_column = pond_name[2:]
                         potential_harvests['data'].setdefault(pond_column, []) # use .setdefault methods to first populate dict key for column (if it doesn't already exist), and an empty list to collect data for each
@@ -480,7 +480,7 @@ class PondsOverviewPlots:
                             color_idx = val
                             fill_color = color_list[color_idx] 
                     # secondary fill color by EPA percentage
-                    if epa_val == '':
+                    if epa_val == None:
                         fill_color='lightgrey'
                     elif color_idx > 0 and epa_val < 2.5:
                         fill_color = 'tan' # indicate out-of-spec EPA value
@@ -497,7 +497,7 @@ class PondsOverviewPlots:
 
             # plot pond EPA data
             try:
-                if epa_val == '':
+                if epa_val == None:
                     epa_val_str = 'No EPA data'
                 else:
                     epa_val_str = f'{epa_val:.2f}% EPA'
