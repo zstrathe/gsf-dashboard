@@ -937,12 +937,12 @@ class PondsOverviewPlots:
             # in that case, append the current figure to fig_list, then generate a new figure and re-plot the table on the new page
             y_align = plot_table(table_title, ax, y_align)
             if y_align == 'start_new_page':
-                plt.show() # show plot for testing in jupyter nb
+                #plt.show() # show plot for testing in jupyter nb
                 fig_list.append(fig)
                 fig, ax, y_align = gen_fig()
                 y_align = plot_table(table_title, ax, y_align)
             y_align -= overall_spacing
-        plt.show() # show plot for testing in jupyter nb
+        #plt.show() # show plot for testing in jupyter nb
         fig_list.append(fig)     
 
         filename = f'./output_files/Potential Harvests {select_date.strftime("%Y-%m-%d")}.pdf'
