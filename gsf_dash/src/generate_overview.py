@@ -377,7 +377,7 @@ class PondsOverviewPlots:
                     epa_date = list(self.epa_data_dict[pond_name].keys())[0] # get 0 index since the epa data should be sorted by most-recent first
                     epa_val = self.epa_data_dict[pond_name][epa_date]
                 except:
-                    epa_val = None
+                    epa_val = 0
                 
                 # get dataframe for individual pond for current date
                 date_single_pond_data = single_pond_data.loc[select_date] 
@@ -480,7 +480,7 @@ class PondsOverviewPlots:
                             color_idx = val
                             fill_color = color_list[color_idx] 
                     # secondary fill color by EPA percentage
-                    if epa_val == None:
+                    if epa_val == 0:
                         fill_color='lightgrey'
                     elif color_idx > 0 and epa_val < 2.5:
                         fill_color = 'tan' # indicate out-of-spec EPA value
@@ -497,7 +497,7 @@ class PondsOverviewPlots:
 
             # plot pond EPA data
             try:
-                if epa_val == None:
+                if epa_val == 0:
                     epa_val_str = 'No EPA data'
                 else:
                     epa_val_str = f'{epa_val:.2f}% EPA'
