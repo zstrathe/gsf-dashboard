@@ -480,7 +480,7 @@ class PondsOverviewPlots:
                             color_idx = val
                             fill_color = color_list[color_idx] 
                     # secondary fill color by EPA percentage
-                    if epa_val == 0:
+                    if epa_val == None:
                         fill_color='lightgrey'
                     elif color_idx > 0 and epa_val < 2.5:
                         fill_color = 'tan' # indicate out-of-spec EPA value
@@ -497,7 +497,7 @@ class PondsOverviewPlots:
 
             # plot pond EPA data
             try:
-                if epa_val == 0:
+                if epa_val == None:
                     epa_val_str = 'No EPA data'
                 else:
                     epa_val_str = f'{epa_val:.2f}% EPA'

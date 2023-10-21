@@ -11,14 +11,14 @@ from os.path import getsize, isfile
 from office365.sharepoint.client_context import ClientContext
 from . import load_setting, EmailHandler
 from .ms_account_connect import MSAccount, M365ExcelFileHandler
-#from .db_utils import init_db_table, insert_replace_row_db_table, get_db_table_columns
-from .db_utils import * #get_db_table_columns, init_db_table, get_primary_keys, delete_existing_rows_ponds_data
+from .db_utils import * 
+from .utils import redirect_logging_to_file
 
 class Dataloader:
     _db_engine = sqlalchemy.create_engine("sqlite:///db/gsf_data.db", echo=False) # initialize sqlalchemy engine / sqlite database
     account = MSAccount() # NEW CLASS FOR HANDLING MS 365 API INTERACTIONS / NEED TO UPDATE CODE TO USE THIS INSTEAD OF 'office365' MODULE
     
-    def __init__(self, select_date):
+    def __init__(self, select_date, run: bool = False):
         self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
         self.ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
                       '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
@@ -27,125 +27,108 @@ class Dataloader:
                       '0106', '0206', '0306', '0406', '0506', '0606', '0706', '0806', '0906', '1006',
                       '0108', '0208', '0308', '0408', '0508', '0608', '0708', '0808', '0908', '1008']
         self.sharepoint_connections = {} # initialize dict to store sharepoint connection for each unique site, to re-use it when downloading multiple files
-        #scorecard_datafile = self.download_data('scorecard_data_info')
-        #scorecard_dataframe = self.load_scorecard_data(scorecard_datafile)
-        #epa_datafile1 = self.download_data('epa_data_info1')
-        #epa_datafile2 = self.download_data('epa_data_info2')
-        #epa_data_dict = self.load_epa_data([epa_datafile1, epa_datafile2])
-        #active_dict = self.generate_active_dict(scorecard_dataframe, num_days_prior=5)
-        #processing_datafile = self.download_data('processing_data_info')
-        #processing_dataframe = self.load_processing_data(processing_datafile)
-        #self.outdata = {'scorecard_dataframe': scorecard_dataframe, 'epa_data_dict': epa_data_dict, 'active_dict': active_dict, 'processing_dataframe': processing_dataframe}
+        if run:
+            self.main_daily() # run method to load data on a daily basis
 
-    def download_data(self, data_item_setting):
-        sharepoint_site, file_url, download_path, expected_min_filesize, print_label = load_setting(data_item_setting).values()
-        if sharepoint_site not in self.sharepoint_connections.keys():
-            # sharepoint auth connect
-            ctx = ClientContext(sharepoint_site).with_client_certificate(**load_setting('sharepoint_cert_credentials'))
-            self.sharepoint_connections[sharepoint_site] = ctx
-        else: 
-            ctx = self.sharepoint_connections[sharepoint_site]
-
-        with open(download_path, "wb") as local_file:
-            print(f'Downloading latest {print_label}')
-            for i in range(5):
-                try:
-                    [print(f'Attempt {i+1}/5') if i > 0 else ''][0]
-                    ctx.web.get_file_by_server_relative_url(file_url).download_session(local_file, lambda x: print(f'Downloaded {x/1e6:.2f} MB'),chunk_size=int(5e6)).execute_query()
-                    break
-                except:
-                    print('Download error...trying again')
-                    if i == 4:
-                        print('Daily scorecard file download error')
-                        return False
-        if getsize(download_path) > int(expected_min_filesize):  # check that downloaded filesize is > 35 MB, in case of any download error
-            print(f'Successfully downloaded {print_label} to {download_path}')
-            return download_path
-        else:
-            print(f'DOWNLOAD ERROR: {print_label}: filesize less than expected!')
-            return False
-
-    def get_data_from_email(self, email_setting: str):
-        print(**load_setting(email_setting))
-        return EmailHandler().get_latest_email_attachment_from_folder(**load_setting(email_setting))
-
-    def download_daily_data_file(self, specify_date: str = '') -> pd.ExcelFile | None:
+    def main_daily(self, run_date: datetime|None = None, db_engine: sqlalchemy.Engine|None = None, lookback_days: int = 5) -> None:
         '''
-        Find and download the "Daily Data" .xlsx file by date (yyyy-mm-dd format)
-        This method looks through "Daily Data" sharepoint directory organized by: YEAR --> MM_MONTH (ex: '04-April') --> FILE ("yyyymmdd Daily Data.xlsx")
-
-        params:
-        --------
-        - specify_date: - date to get daily data for (defaults to self.select_date if not specified)
-                        - must be in "yyyy-mm-dd" format
-            
-        RETURNS -> pd.ExcelFile object (if successful download) or None (if failure)
+        Method to tie together daily processes to run for downloading/loading/processing data and loading into a db table
         '''
-        specify_date = self.select_date if specify_date == '' else datetime.strptime(specify_date, "%Y-%m-%d")
-        folder_id = load_setting('daily_data_info')['folder_id']
-        for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
-            # first look for the "year" directory
-            if year_dir.name == str(specify_date.year): 
-                # look within the year subdirectory
-                for month_dir in year_dir.get_items():
-                    if month_dir.name.lower() == specify_date.strftime('%m_%B').lower(): 
-                        for daily_file in month_dir.get_items():
-                            # search for filename with regex: case-insensitive: ["yyyymmdd" (1 or more whitespace chars) "daily data" (zero or more whitespace chars) ".xlsx"]
-                            # use re.search to find 3 groups in filename: date formatted as "yyyymmdd", "daily data" (case insensitive), ".xlsx" (must be at end)
-                            file_search = re.search(r"(?i)({})\s+(Daily Data).*(\.xlsx$)".format(specify_date.strftime('%y%m%d')), daily_file.name)
-                            if file_search:
-                                print('FOUND FILE:', daily_file.name)
-                                dl_path = Path(f'data_sources/tmp/')
-                                daily_file.download(to_path=dl_path)
-                                dl_path = dl_path / daily_file.name
-                                if dl_path.is_file():
-                                    excel_file = pd.ExcelFile(dl_path.as_posix()) # load excel file
-                                    dl_path.unlink() # delete file after loading
-                                    return excel_file
-                                else:
-                                    print(f'ERROR DOWNLOADING DAILY DATA FILE FOR {datetime.strftime(specify_date, "%m/%d/%Y")}!')
-                                    dl_path.unlink() # remove whatever file may be present (corrupted/partial download maybe??)
-                                    return None
-                        print(f'COULD NOT FIND DAILY DATA FILE FOR {datetime.strftime(specify_date, "%m/%d/%Y")}!')
-                        return None
+        if not run_date:
+            run_date = self.select_date
+        if not db_engine:
+            db_engine = self._db_engine
 
-    def rebuild_daily_data_db(self, start_date: str, end_date: str, db_name: str, table_name: str = 'ponds_data') -> None:
+        daily_data_dfs = []
+        
+        '''
+        Start with a "base_df" to ensure that a row every Date & PondID combination is included in the db, even if no data is found
+        '''
+        date_range = pd.date_range(run_date-pd.Timedelta(days=lookback_days), run_date).map(lambda x: x.strftime('%Y-%m-%d'))
+        lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, self.ponds_list])
+        base_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
+        daily_data_dfs.append(base_df)
+
+        ''' 
+        Call method to process and load into db the daily data file 
+        '''
+        daily_data_dfs.append(self.load_daily_data_prev_n_days(prev_num_days_to_load=lookback_days, specify_date=run_date, db_engine=db_engine))
+
+        ''' 
+        Get data from scorecard file and add/update the database table for those entries ("Comments-Scorecard" & "Split Innoculum" [to indicate when a pond is harvested or split])
+        Reload data for past 5 days (in case any of it changed) 
+        '''
+        daily_data_dfs.append(self.load_scorecard_data(begin_date=run_date-pd.Timedelta(days=lookback_days), end_date=run_date))
+
+        joined_daily_df = functools.reduce(lambda df1, df2: pd.merge(df1, df2, on=['Date','PondID'], how='outer'), daily_data_dfs)
+        #joined_daily_df = daily_data_df.merge(sc_data_df, on=['Date', 'PondID'], how='outer')
+        #joined_daily_df.to_excel('joined_data_test.xlsx')
+        
+        print('Deleting existing rows from table...')
+        delete_existing_rows_ponds_data(db_engine, table_name='ponds_data', update_data_df=joined_daily_df)
+        
+        ''' 
+        Use DataFrame.to_sql() to insert data into database table
+        '''
+        joined_daily_df.to_sql(name='ponds_data', con=db_engine, if_exists='append', index=False)
+        print(f'Updated DB for {datetime.strftime(run_date, "%m/%d/%Y")}!')
+        
+        ''' 
+        Complete calculations with daily data
+        '''
+        self.daily_data_calculations(check_date=run_date, db_engine=db_engine)
+        self.chemical_cost_calculations(check_date=run_date, db_engine=db_engine)
+
+        print('Finished with daily data updates to DB!')
+
+    def rebuild_db(self, start_date: str, end_date: str, db_name: str, table_name: str = 'ponds_data') -> None:
         ''' 
         Method to fully re-build the daily data database from "from_date" to the  "to_date"
         if test_db is specified, then write to that database instead of the normal db file
         start_date: specify by "YYYY-MM-DD" - earliest possible date with data is 2017-03-15
         end_date: specify by "YYYY-MM-DD"
         '''
-        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False) # initialize sqlalchemy engine / sqlite database
-        init_db_table(db_engine, table_name) # init 'ponds_data' table (if using default param)
-        init_db_table(db_engine, f'{table_name}_calculated') # init 'ponds_data_calculated' table
-        init_db_table(db_engine, f'{table_name}_expenses') # init 'ponds_data_expenses' table
-        
         start_date = datetime.strptime(start_date, "%Y-%m-%d")
         end_date = datetime.strptime(end_date, "%Y-%m-%d")
+        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False) # initialize sqlalchemy engine / sqlite database
+        
+        def init_tables():
+            init_db_table(db_engine, table_name) # init 'ponds_data' table (if using default param)
+            init_db_table(db_engine, f'{table_name}_calculated') # init 'ponds_data_calculated' table
+            init_db_table(db_engine, f'{table_name}_expenses') # init 'ponds_data_expenses' table
+            return db_engine
 
-        removed_cols_list = []
-        for d in rrule(DAILY, dtstart=start_date, until=end_date):
-            print('\n\nLoading', datetime.strftime(d, "%m/%d/%Y"))
-            [removed_cols_list.append(removed_col) for removed_col in self.load_daily_data(db_engine=db_engine, specify_date=d, return_removed_cols=True) if removed_col not in removed_cols_list ]
-        print('Finished building DB!!')
-        print('Removed columns:', removed_cols_list)
+        # use decorator from .utils.py to redirect stdout to a log file, only while building the DB
+        @redirect_logging_to_file(log_file_directory=Path(f'db/logs/'), 
+                                            log_file_name=f'{date.today().strftime("%y%m%d")}_rebuild_db_{db_name}_{start_date.strftime("%y%m%d")}_{end_date.strftime("%y%m%d")}.log')
+        def rebuild_db_run():
+            removed_cols_list = []
+            for d in rrule(DAILY, dtstart=start_date, until=end_date):
+                print('\n\nLoading', datetime.strftime(d, "%m/%d/%Y"))
+                ##########[removed_cols_list.append(removed_col) for removed_col in self.load_daily_data(db_engine=db_engine, specify_date=d, return_removed_cols=True) if removed_col not in removed_cols_list ]
+                self.main_daily(run_date=d, db_engine=db_engine, lookback_days=0)
+            print('Finished building DB!!')
+            print('Removed columns:', removed_cols_list)
+        
+        init_tables()
+        rebuild_db_run()
 
     def load_daily_data_prev_n_days(self, prev_num_days_to_load: int, specify_date: datetime = None, **kwargs):
-        # load class 'select_date' if custom parameter not provided
+        # load class variable 'select_date' if custom parameter not provided
         if not specify_date:
             specify_date = self.select_date
-        start_date = specify_date - timedelta(days=prev_num_days_to_load)
-        for d in rrule(DAILY, dtstart=start_date, until=specify_date):
-            self.load_daily_data(specify_date=d, **kwargs)
+        start_date = specify_date - pd.Timedelta(days=prev_num_days_to_load)
+        day_dfs = []
+        for idx, d in enumerate(rrule(DAILY, dtstart=start_date, until=specify_date)):
+            day_dfs.append(self.load_daily_data_file(specify_date=d, **kwargs))
+        out_df = pd.concat(day_dfs, axis=0, join='outer') 
+        return out_df
     
-    def load_daily_data(self, specify_date: datetime, db_engine: sqlalchemy.Engine = None, table_name='ponds_data', return_removed_cols=False):  # daily_data_excel_file_path: Path
+    def load_daily_data_file(self, specify_date: datetime, db_engine: sqlalchemy.Engine = None, table_name='ponds_data', return_removed_cols=False):  # daily_data_excel_file_path: Path
         '''
         Load the daily data file path, must be an excel file!
         Data is indexed by pond_name in multiple sheets within the excel file
         This function combines data between all sheets into single dataframe and loads into database 
-
-        TODO: load "Comments" and "Split Innoculum" data from scorecard file
         '''
         # load class _db_engine if custom enginee parameter not provided
         if not db_engine:
@@ -276,24 +259,109 @@ class Dataloader:
             raise Exception('ERROR WITH MERGING DAILY DATA SHEETS!')
         
         joined_df = joined_df.reset_index() #.set_index(['Date', 'PondID']) # reset index and create a multi-index (a compound primary key or whatever it's called for the SQL db)
+        return joined_df
+        # # Delete pre-existing duplicate rows from database table (so that using pd.to_sql() with 'append' mode will not add duplicated rows when re-loading data)
+        # print('Deleting existing rows from table...')
+        # delete_existing_rows_ponds_data(db_engine, table_name, joined_df)
         
-        # Delete pre-existing duplicate rows from database table (so that using pd.to_sql() with 'append' mode will not add duplicated rows when re-loading data)
-        print('Deleting existing rows from table...')
-        delete_existing_rows_ponds_data(db_engine, table_name, joined_df)
-        
-        # Use DataFrame.to_sql() to insert data into database table
-        joined_df.to_sql(name=table_name, con=db_engine, if_exists='append', index=False)
-        print(f'Updated DB for {datetime.strftime(specify_date, "%m/%d/%Y")}!')
+        # # Use DataFrame.to_sql() to insert data into database table
+        # joined_df.to_sql(name=table_name, con=db_engine, if_exists='append', index=False)
+        # print(f'Updated DB for {datetime.strftime(specify_date, "%m/%d/%Y")}!')
 
-        # call function to perform calculations from daily data (stored in 'ponds_data_calculated' table)
-        self.daily_data_calculations(check_date=specify_date, db_engine=db_engine)
-        self.chemical_cost_calculations(check_date=specify_date, db_engine=db_engine)
+        # # call function to perform calculations from daily data (stored in 'ponds_data_calculated' table)
+        # # self.daily_data_calculations(check_date=specify_date, db_engine=db_engine)
+        # # self.chemical_cost_calculations(check_date=specify_date, db_engine=db_engine)
         
-        if return_removed_cols:
-            return all_removed_cols
-        else:
-            return None
-          
+        # if return_removed_cols:
+        #     return all_removed_cols
+        # else:
+        #     return None
+
+    def download_daily_data_file(self, specify_date: str = '') -> pd.ExcelFile | None:
+        '''
+        Find and download the "Daily Data" .xlsx file by date (yyyy-mm-dd format)
+        This method looks through "Daily Data" sharepoint directory organized by: YEAR --> MM_MONTH (ex: '04-April') --> FILE ("yyyymmdd Daily Data.xlsx")
+
+        params:
+        --------
+        - specify_date: - date to get daily data for (defaults to self.select_date if not specified)
+                        - must be in "yyyy-mm-dd" format
+            
+        RETURNS -> pd.ExcelFile object (if successful download) or None (if failure)
+        '''
+        specify_date = self.select_date if specify_date == '' else datetime.strptime(specify_date, "%Y-%m-%d")
+        folder_id = load_setting('daily_data_info')['folder_id']
+        for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
+            # first look for the "year" directory
+            if year_dir.name == str(specify_date.year): 
+                # look within the year subdirectory
+                for month_dir in year_dir.get_items():
+                    if month_dir.name.lower() == specify_date.strftime('%m_%B').lower(): 
+                        for daily_file in month_dir.get_items():
+                            # search for filename with regex: case-insensitive: ["yyyymmdd" (1 or more whitespace chars) "daily data" (zero or more whitespace chars) ".xlsx"]
+                            # use re.search to find 3 groups in filename: date formatted as "yyyymmdd", "daily data" (case insensitive), ".xlsx" (must be at end)
+                            file_search = re.search(r"(?i)({})\s+(Daily Data).*(\.xlsx$)".format(specify_date.strftime('%y%m%d')), daily_file.name)
+                            if file_search:
+                                print('FOUND FILE:', daily_file.name)
+                                dl_path = Path(f'data_sources/tmp/')
+                                daily_file.download(to_path=dl_path)
+                                dl_path = dl_path / daily_file.name
+                                if dl_path.is_file():
+                                    excel_file = pd.ExcelFile(dl_path.as_posix()) # load excel file
+                                    dl_path.unlink() # delete file after loading
+                                    return excel_file
+                                else:
+                                    print(f'ERROR DOWNLOADING DAILY DATA FILE FOR {datetime.strftime(specify_date, "%m/%d/%Y")}!')
+                                    dl_path.unlink() # remove whatever file may be present (corrupted/partial download maybe??)
+                                    return None
+                        print(f'COULD NOT FIND DAILY DATA FILE FOR {datetime.strftime(specify_date, "%m/%d/%Y")}!')
+                        return None
+                        
+    ''' WIP methods to calculate harvested/split mass amounts (calc_harvested_split2 is faster by 33% but code is less readable imo... '''
+    # def tmp_query_calculate_estimated_harvested(self, check_date: datetime, db_engine: sqlalchemy.Engine | None = None, data_table_name: str = 'ponds_data', out_table_name: str = 'ponds_data_harvested_estimates'):
+    #     df_data = query_data_table_by_date_range(db_name_or_engine=db_engine, table_name='ponds_data', query_date_start=check_date-pd.Timedelta(days=5), query_date_end=check_date, col_names=['Split Innoculum'])
+    #     df_data_calcs = query_data_table_by_date_range(db_name_or_engine=db_engine, table_name='ponds_data_calculated', query_date_start=check_date-pd.Timedelta(days=5), query_date_end=check_date, col_names=None)
+    #     combined_df = pd.merge(df_data, df_data_calcs, on=['Date', 'PondID'], how='outer')
+    #     return combined_df
+
+    # def calc_harvested_split(df):
+    # df = df.copy()
+    # for pond_id in df['PondID'].unique():
+    #     mask = df['PondID'] == pond_id
+    #     df.loc[mask,'_tmp_next_day_mass'] = df.loc[mask, 'calc_mass_nanno_corrected'].shift(-1)
+    #     df.loc[mask, '_tmp_harvest_complete'] = df.loc[mask, 'Split Innoculum'].shift(-1).apply(lambda x: True if x == 'I' else False)
+    #     df.loc[mask, 'est_harvested'] = df.loc[mask, :].apply(lambda x: x['calc_mass_nanno_corrected'] if x['_tmp_harvest_complete'] == True else (x['calc_mass_nanno_corrected'] - x['_tmp_next_day_mass'] if x['Split Innoculum'] == 'H' else 0), axis=1)
+    #     df.loc[mask, 'est_split'] = df.loc[mask, :].apply(lambda x: x['calc_mass_nanno_corrected'] - x['_tmp_next_day_mass'] if x['Split Innoculum'] == 'S' else 0, axis=1)
+    #    # df.loc[mask, 'est_harvested'] = df.loc[mask, :].apply(lambda x: x['calc_mass'] if df.loc[mask, 'Split Innoculum'].shift(-1).loc[x.name] == 'I' else (x['calc_mass'] - df.loc[mask, 'calc_mass'].shift(-1).loc[x.name] if x['Split Innoculum'] == 'H' else 0), axis=1)
+    # df = df.drop([col for col in df.columns if '_tmp_' in col], axis=1)
+    # return df
+
+    # def calc_harvested_split2(df):
+    #     df = df.copy()
+    #     for pond_id in df['PondID'].unique():
+    #         mask = df['PondID'] == pond_id
+    #         mask_idx = list(df.loc[mask].index)
+    #         #df.loc[mask, 'est_harvested'] = df.loc[mask, :].apply(lambda x: x['calc_mass_nanno_corrected'] if df.loc[mask_idx.index(x.name) + 1, 'Split Innoculum'] == 'I' else (x['calc_mass_nanno_corrected'] - df.loc[mask_idx.index(x.name) + 1, 'calc_mass_nanno_corrected'] if x['Split Innoculum'] == 'H' else 0), axis=1)
+    #         #df.loc[mask, 'est_split'] = df.loc[mask, :].apply(lambda x: x['calc_mass_nanno_corrected'] - df.loc[mask_idx.index(x.name) + 1, 'calc_mass_nanno_corrected'] if x['Split Innoculum'] == 'S' else 0, axis=1)
+    #         def get_h_s_amount(df_row, h_or_s: str):
+    #             ''' h_or_s: 'h' or 's' to select between getting 'harvest' or 'split' amount '''
+    #             h_or_s = h_or_s.upper()
+    #             cur_row_mask_idx = mask_idx.index(df_row.name)
+    #             if cur_row_mask_idx+1 != len(mask_idx):
+    #                 if df_row['Split Innoculum'] == h_or_s:
+    #                     if df.loc[mask_idx[cur_row_mask_idx+1], 'Split Innoculum'] == 'I':
+    #                         return df_row['calc_mass_nanno_corrected']
+    #                     else:
+    #                         return df_row['calc_mass_nanno_corrected'] - df.loc[mask_idx[cur_row_mask_idx+1], 'calc_mass_nanno_corrected']
+    #                 else:
+    #                     return 0
+    #             else:
+    #                 return 0 # always return 0 on the last day being checked, since there's no way to determine how much is harvested until another day's data is checked
+    #         df.loc[mask, 'est_harvested'] = df.loc[mask, :].apply(lambda x: get_h_s_amount(x, 'h'), axis=1)
+    #         df.loc[mask, 'est_split'] = df.loc[mask, :].apply(lambda x: get_h_s_amount(x, 's'), axis=1)
+    #     #df.loc[mask, 'est_harvested'] = df.loc[mask, :].apply(lambda x: df.loc[mask_idx[mask_idx.index(x.name) + 1], 'calc_mass_nanno_corrected'], axis=1)
+    #     return df
+
     def daily_data_calculations(self, check_date: datetime, db_engine: sqlalchemy.Engine | None = None, data_table_name: str = 'ponds_data', out_table_name: str = 'ponds_data_calculated') -> None:
         '''
         Method to generate calculated fields from daily data that has been loaded
@@ -313,6 +381,8 @@ class Dataloader:
              - 'harvestable_gallons': harvestable_depth_inches converted into gallons 
              - 'harvestable_mass': harvestable_depth_inches converted into mass (in kg)
              - 'harvestable_mass_corrected': harvestable_mass multiplied by "% Nanno" measurement
+             - 'harvested_today': if 'ponds_data' "Split Innoculum" column contains "H" value for date
+             - 'split_today': if 'ponds_data' "Split Innoculum" column contains "S" value for date
         '''
         # helper function to convert density & depth to mass (in kilograms)
         def afdw_depth_to_mass(afdw: int|float, depth: int|float, pond_id: str):
@@ -350,9 +420,7 @@ class Dataloader:
         for (pond_id, afdw, depth, pct_nanno) in afdw_depth_data:
             
             if any(x in (0, None) for x in (afdw, depth)):
-           # if None in (afdw, depth):
-                print(f'Incomplete data, skipping {pond_id} for {check_date}')
-                # add new blank row for pond_id
+                # add new blank row for pond_id if there's no data
                 calcs_df = calcs_df.append({'PondID': pond_id}, ignore_index=True)
             else:
                 estimated_mass = afdw_depth_to_mass(afdw, depth, pond_id)
@@ -454,10 +522,11 @@ class Dataloader:
 
         # append df to database table
         cost_df.to_sql(name=out_table_name, con=db_engine, if_exists='append', index=False)
-
+    
     def calculate_growth(pond_data_df, select_date, num_days, remove_outliers, data_count_threshold=2, weighted_stats_for_outliers=True):
         '''
         NEW **** MOVED TO DATALOADER, UTILIZE DATABASE TO QUERY/CALCULATE THIS?? ****
+        NOT UPDATED YET
         
         pond_data_df: pandas dataframe
             - dataframe for individual pond
@@ -620,238 +689,335 @@ class Dataloader:
 #                         high_bound = quantile_high + (1.5*iqr)
 #                         print('low quantile: ', quantile_low, '| high quantile: ', quantile_high)
 #                         print('low bound: ', low_bound, '| high bound: ', high_bound)
-        
-        
-        
-    def load_scorecard_data(self, excel_filename):
-        ponds_list = self.ponds_list
-        
-        print('Loading scorecard data...')
-        # Load the Daily Pond Scorecard excel file
-        excel_sheets = pd.ExcelFile(excel_filename)
-
-        # create a dict containing a dataframe for each pond sheet
-        all_ponds_data = {}
-        for i in ponds_list:
-            try:
-                all_ponds_data[i] = excel_sheets.parse(i)
-            except:
-                print('Failed to load data for pond:', i)
-
-        # clean the pond data (convert data from string to datetime, set date as index, drop empty columns   
-        updated_ponds_data = {} # dict for storing cleaned data
-        for key in enumerate(all_ponds_data.keys()):
-            df = all_ponds_data[key[1]]
-            df = df.rename(columns={df.columns[0]:'date'})
-            df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
-            df = df.dropna(subset=['date']) # drop rows that don't contain a date/valid date
-            df = df.set_index(df['date'].name) # set date column as index
-            df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
-            updated_ponds_data[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
-        print('Scorecard data loaded!')
-        return updated_ponds_data # return the cleaned data dict
+           
+    # def load_scorecard_data_new(self, excel_file_id, begin_date: datetime, end_date: datetime, include_columns: list = ['Comments', 'Split Innoculum']):
+    #     sc_file = M365ExcelFileHandler(excel_file_id, load_data=True, ignore_sheets=['Analysis', 'Template', 'Notes'])
+    #     pond_df_list = []
+    #     for pond_id in self.ponds_list:
+    #         pond_df = sc_file.sheet_data.get(pond_id).df
+    #         pond_df.columns.values[0] = 'Date' # rename the first column to date, since it's always the pond id listed here on these sheets (but it's the date index col)
+    #         print('testetsetsetsts date', pond_df['Date'])
+    #         pond_df = pond_df[pond_df['Date'].between(begin_date, end_date)]
+    #         if include_columns:
+    #             pond_df = pond_df[include_columns]
+    #             pond_df['PondID'] = pond_id
+    #         pond_df_list.append(pond_df)
+    #     return pd.concat(pond_df_list, axis=0
     
-    def load_processing_data(self, excel_filename):
-        print('Loading processing data')
-        df = pd.read_excel(excel_filename, sheet_name='SF Harvest')
-        df = df.rename(columns={df.columns[0]:'date'})
-        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
-        df = df.set_index(df['date'].name) # set date column as index
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
-        print('Processing data loaded!')
-        return df
-    
-    def load_sfdata(self, excel_filename):
-        print('Loading SF Data')
-        df = pd.read_excel(excel_filename, sheet_name='Customer Log')
-        df = df.rename(columns={df.columns[0]:'date'})
-        df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
-        df = df.set_index(df['date'].name) # set date column as index
-        df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
-        print('SF data loaded!')
-        return df 
-    
-    def load_epa_data(self, excel_epa_data_filenames: list, debug_print=False) -> dict:
-        ponds_list = self.ponds_list
-        select_date = self.select_date
-        
-        def process_excel_file(excel_filename):
-            # create a dict with an empty list for each pond number (to store date and epa value)
-            ponds_data_dict = {k: {} for k in ponds_list} 
-            
-            # load epa_data spreadsheet  
-            epa_df = pd.read_excel(excel_filename, sheet_name="Sheet1", header=None)
-
-            # check which file is being loaded (2 different sources currently)
-            if 'epa_data1.xlsx' in excel_filename: # checking if this is the primary data source (from self lab testing)
-                # parse the first 4 columns to update header (since excel file col headers are on different rows/merged rows)
-                epa_df.iloc[0:4] = epa_df.iloc[0:4].fillna(method='bfill', axis=0) # backfill empty header rows in the first 4 header rows, results in header info copied to first row for all cols
-                epa_df.iloc[0] = epa_df.iloc[0].apply(lambda x: ' '.join(x.split())) # remove extra spaces from the strings in the first column
-                epa_df.columns = epa_df.iloc[0] # set header row
-                epa_df = epa_df.iloc[4:] # delete the now unnecessary/duplicate rows of header data
-
-                # process each row using Pandas vectorization and list comprehension rather than looping for better processing efficiency
-                # process in reverse order to check for most-recent samples first
-                [process_epa_row(a, b, ponds_data_dict) for a, b in (zip(epa_df['Sample type'][::-1], epa_df['EPA % AFDW'][::-1]))]
-
-            elif 'epa_data2.xlsx' in excel_filename: #chck if it's the secondary data source (from third party lab)
-                epa_df.columns = epa_df.iloc[0] # convert first row to column header
-                epa_df = epa_df.iloc[1:] # delete the first row since it's now converted to column headers
-
-                # process each row using Pandas vectorization and list comprehension rather than looping for better processing efficiency
-                # process in reverse order to check for most-recent samples first
-                [process_epa_row(a, b, ponds_data_dict, convert_val_from_decimal_to_percentage=True) for a, b in (zip(epa_df['Sample'][::-1], epa_df['C20:5 Methyl eicosapentaenoate (2734-47-6), 10%'][::-1]))]     
-
-            # Iterate through ponds_data_dict, and average the EPA values for each date (when there is more than one value per date)
-            for idx, (pond_name, single_pond_data) in enumerate(ponds_data_dict.copy().items()):
-                # get the average EPA of all values for each day (or will just convert to a float for a single value)
-                for idx2, (date_key, epa_vals) in enumerate(single_pond_data.items()): 
-                    ponds_data_dict[pond_name][date_key] = sum(epa_vals) / len(epa_vals)
-                # resort the dict just to be certain that the most-recent date is first (in case the source data isn't in correct order)
-                # and trim data to last 3 most-recent data points
-                ponds_data_dict[pond_name] = dict(sorted(ponds_data_dict[pond_name].items(), reverse=True)[:3]) 
-            
-            return ponds_data_dict 
-        
-        def process_epa_row(sample_label, epa_val, ponds_data_dict, convert_val_from_decimal_to_percentage=False):    
-            if debug_print:
-                print(sample_label, end=' | ')
-        
-            if type(sample_label) != str:
-                if debug_print:
-                    print('ERROR: sample label not a string')
-                return
-            
-            # search for pond name in sample_label with regex (looking for 4 digits surrounded by nothing else or whitespace)
-            # regex ref: https://stackoverflow.com/questions/45189706/regular-expression-matching-words-between-white-space
-            pondname_search = re.search(r'(?<!\S)\d{4}(?!\S)', sample_label)
-            if pondname_search:
-                pond_name = pondname_search.group()
-            else:
-                # check for pond name with alternate data source (epa_data2.xlsx), where some of the pond names are represented with only 3 digits, missing a leading 0 (e.g., 301 - means '0301') 
-                pondname_search = re.search(r'(?<!\S)\d{3}(?!\S)', sample_label)
-                if pondname_search:
-                    pond_name = pondname_search.group()
-                    pond_name = '0' + pond_name
-                else:
-                    if debug_print:
-                        print('ERROR: no pond name found in sample label')
-                    return
-            
-            # search for date in sample_label with regex (looking for 6 digits surrounded by nothing else or whitespace)
-            date_search = re.search(r'(?<!\S)\d{6}(?!\S)',sample_label)
-            if date_search:
-                date = datetime.strptime(date_search.group(), "%y%m%d")
-                diff_days = (select_date-date).days
-                # check if select date is before the epa value date (in which case this epa data row should be skipped to ensure that the report is using data relative to the select_date)
-                # or if the epa value date is over 60 days older than the select_date, in which case it should also be skipped because the data is too old to be useful
-                if diff_days < 0 or diff_days > 60:
-                    if debug_print:
-                        print(f'ERROR: sample date after \'{select_date}\' or sample over 60 day threshold')
-                    return
-            else:
-                if debug_print:
-                    print('ERROR: no date found in sample label')
-                return
-
-            try:
-                epa_val = float(epa_val)
-            except:
-                if debug_print:
-                    print('ERROR: EPA val is not a valid number')
-                return
-
-            # check if pond number exists as a key in pond data, ignore this data line if not    
-            if pond_name not in ponds_data_dict:
-                print('EPA KEY ERROR:', pond_name)
-                return 
-            
-            # convert epa val from decimal to percentage (i.e., 0.01 -> 1.00)
-            if convert_val_from_decimal_to_percentage:
-                epa_val *= 100
-            
-            # add epa values for each date (check if a key-value pair already exists for appending multiple values if necessary, to calculate an average later)
-            if date not in ponds_data_dict[pond_name]:
-                ponds_data_dict[pond_name][date] = [epa_val]
-            else:
-                ponds_data_dict[pond_name][date].append(epa_val)
-            
-            if debug_print:
-                print('SUCCESS', date, pond_name, epa_val)
-            
-        def merge_epa_data(epa_dict1, epa_dict2) -> dict:
-            ''' 
-            Copies EPA data from epa_dict2 into epa_dict1
-            These should each already have unique values for the dict[date] key, so 
-            If any duplicate data exists for epa values on any date, then take the average of the two values from each dict
-            '''
-            combined_dict = epa_dict1
-            # add merge dict2 with dict1, checking for duplicate 'pond_name' keys, then 'date' keys within that subdict if it already exists
-            for idx, (pond_name, pond_date_dict2) in enumerate(epa_dict2.items()):
-                if pond_name not in epa_dict1:
-                    # set nonexistent dict1 key/value equal to the dict2 key/val,
-                    # since this should already be averaged by day and sorted descending by load_epa_data(), 
-                    # then there is no need for further processing
-                    epa_dict1[pond_name] = pond_date_dict2 
-                else:
-                    # append dict2 keys and values to dict1 existing values
-                    # enumerate throught the subdict and check if the key (date) already exists in dict1
-                    for idx, (date, epa_val2) in enumerate(pond_date_dict2.items()):
-                        if date not in epa_dict1[pond_name]:
-                            # add the epa_val to this date key in dict1 since it does not already exist
-                            epa_dict1[pond_name][date] = epa_val2 
-                        else:
-                            # get the average of dict1 and dict2 values then set it as dict1 value,
-                            # since each of the input dicts should already only have 1 value for each date,
-                            # then can average them at this step
-                            epa_val1 = epa_dict1[pond_name][date]
-                            epa_dict1[pond_name][date] = (epa_val1 + epa_val2) / 2
-                    # re-sort and filter to only 3 most-recent dates since data for this dict was modified
-                    epa_dict1[pond_name] = dict(sorted(epa_dict1[pond_name].items(), reverse=True)[:3]) 
-            return epa_dict1
+    def load_scorecard_data(self, begin_date: datetime, end_date: datetime):
+        # save loaded file as a class attribute in case of using multiple successive calls to this method
+        if not hasattr(self, '_sc_file'):
+            print('Loading scorecard file...')
+            file_id = load_setting('file_ids').get('scorecard')
+            self._sc_file = M365ExcelFileHandler(excel_file_id=file_id, load_data=True, data_get_method='DL', ignore_sheets=['Analysis', 'Template', 'Notes', 'SUBSTRING[(old)]', 'SUBSTRING[HRP]'])
+        sc_file = self._sc_file
              
-        print('Loading EPA data...')
-        tmp_list = []
-        for excel_filename in excel_epa_data_filenames:
-            tmp_list.append(process_excel_file(excel_filename))
-        print('EPA data loaded!')
-        return merge_epa_data(tmp_list[0], tmp_list[1]) 
-        
-        
-    # helper function to check if a pond has data from prior n-days from the selected date 
-    # checking if there is data in the 'Fo' column up to n-days (num_days_prior)
-    def generate_active_dict(self, pond_scorecard_data, num_days_prior):
-        ponds_list = self.ponds_list
-        select_date = self.select_date
-        
-        def check_active_query(pond_name, prev_day_n): 
-            try:
-                dat = pond_scorecard_data[pond_name][['Fo', 'Split Innoculum', 'Comments']].shift(prev_day_n).loc[select_date]
-                # check if pond is noted as "I" for inactive in the "Split Innoculum" column, or some variation of 'harvest complete' in the "Comments" column
-                # if so, break immediately and return False in the outer function (return that the particular pond is "inactive")
-                if str(dat[1]).upper() == 'I' or any(x in str(dat[2]).lower() for x in ['harvest complete', 'complete harvest', 'complete transfer']): 
-                    return 'FalseBreakImmediate'
-                elif pd.isna(dat[0]) or dat[0] == 0: # if 'Fo' data is NaN or 0
-                    return False
-                else:
-                    return True  # return true since it can be assumed the dat[0] column contains a value if execution passed the prior conditional checks
+        include_columns = ['Date', 'Comments', 'Split Innoculum']
+        all_df_list = []
+        for pond_id in self.ponds_list:
+            try: 
+                pond_df = sc_file.sheet_data.get(pond_id).df
             except:
-                return False # return false if querying the dataframe resulted in an error
+                print(f'No scorecard data available for PondID: {pond_id}. Skipping...')
+                continue
+            pond_df.columns.values[0] = 'Date' # rename the first column to date, since it's always the pond id listed here on these sheets (but it's the date index col)
+            pond_df['Date'] = pd.to_datetime(pond_df['Date'], errors='coerce') # datetime values should already exist, but this converts any errors into a NaT value with errors='coerce'
+            pond_df = pond_df.dropna(subset=['Date']) # drop na values from Date column (after forcing error values into a NaT value)                                        
+            pond_df = pond_df[pond_df['Date'].between(begin_date, end_date)] # filter data by Date, get only data between begin_date and end_date
+            pond_df['Date'] = pond_df['Date'].apply(lambda x: x.strftime("%Y-%m-%d")) # convert Date into a string representation for SQL queries
+            pond_df = pond_df[include_columns] # filter columns
+            pond_df['PondID'] = pond_id # add PondID column for DB table indexing
+            pond_df = pond_df.rename(columns={'Comments': 'Comments-ScorecardFile'}) # rename Comments column to be consistent with DB
+            all_df_list.append(pond_df)
+        out_df = pd.concat(all_df_list, axis=0)
+        return out_df
         
-        # iterate through the ponds_list and create a dict entry for whether that pond is active (val = True) or not (val = False)
-        active_ponds_dict = {}
-        for p in ponds_list:
-            for n in range(0,num_days_prior+1):
-                prev_n_day_active = check_active_query(p, n)
-                # if pond is found to be active, set val to True and break from iterating through the range of 'num_days_prior'
-                if prev_n_day_active == True:
-                    active_ponds_dict[p] = True 
-                    break
-                # if 'FalseBreakImmediate' condition or when the last 'n' day in num_days prior is found to be inactive, then set val to False and break loop (break isn't really necessary for the second case since it should be the end of the loop anyway)
-                elif prev_n_day_active == 'FalseBreakImmediate' or (n == num_days_prior and prev_n_day_active == False):
-                    active_ponds_dict[p] = False
-                    break
-                # if the prev 'n' day is not active, but still have more days to check, then do nothing on this loop iteration
-                else:
-                    pass
-        return active_ponds_dict
+        # def custom_to_sql_update(table_name, db_engine, columns, data_rows):
+        #     from sqlalchemy import text
+        #     import sqlalchemy
+        #     indexing_columns = ['Date', 'PondID']
+        #     columns = [str(col).replace("'","").replace('"', '') for col in columns] # escape quotes in columns
+        #     data_rows = [[str(item).replace("'","").replace('"', '') for item in row] for row in data_rows] # escape quotes in data
+        #     data_columns = [col for col in columns if col not in indexing_columns]
+        #     data = [dict(zip(columns, row)) for row in data_rows]
+        #     sql_stmts = []
+        #     for row in data:
+        #         UPDATE_pairs = []
+        #         WHERE_pairs = []
+        #         for idx, (k, v) in enumerate(row.items()):
+        #             temp_str = f'"{k}" = "{v}"'
+        #             if k not in indexing_columns:
+        #                 UPDATE_pairs.append(temp_str)
+        #             else:
+        #                 WHERE_pairs.append(temp_str)
+        #         sql_stmts.append(f"UPDATE {table_name} SET {', '.join(UPDATE_pairs)} WHERE {' AND '.join(WHERE_pairs)};")
+        #     with db_engine.begin() as cur:
+        #         update_count = 0
+        #         for stmt in sql_stmts:
+        #             result = cur.execute(text(stmt))
+        #             print(result)
+        #             #update_count += result
+        #     return #result.rowcount
+
+       #  def sql_update_by_date_pondid(db_engine, table_name, df):
+       #      from sqlalchemy import bindparam, update
+            
+       #      indexing_columns = ['Date', 'PondID']
+       #      if not all([c in df.columns for c in indexing_columns]):
+       #          raise Exception('ERROR: dataframe missing either "Date" or "PondID" column for indexing, cannot perform update!')
+       #      data_columns = [col for col in df.columns if col not in indexing_columns]
+       #      data_rows = [[str(item).replace("'","").replace('"', '') for item in row] for row in df.values]
+       #      data_all = [dict(zip(df.columns, row)) for row in data_rows]
+       #      table_obj = load_table(db_engine, table_name) # function from .db_utils.py to load as SQLAlchemy Table class 
+       #      # raise exception if table does not contain all columns in the dataframe
+       #      if not all([c in table_obj.columns for c in df.columns]):
+       #          raise Exception('ERROR: trying to update with columns not present in the database table!')
+            
+       #      stmt = (
+       #          update(table_obj)
+       #          .where(table_obj.c.Date == bindparam("Date"))
+       #          .where(table_obj.c.PondID == bindparam("PondID")))
+       #      for col_name in data_columns:
+       #          #stmt = stmt.values(col_name=bindparam(col_name))
+       #          stmt = stmt.values(**{table_obj.c.col_name: bindparam(f'"{col_name}"')})
+       #      print('test columns', data_columns, all([c in table_obj.columns for c in data_columns]))
+       #      with db_engine.begin() as conn:
+       #          conn.execute(stmt,data_all)
+                
+       #  # update db table, using custom callable method
+       # # updated_rows_count = out_df.to_sql(name=table_name, con=db_engine, if_exists='append', index=False, method=custom_to_sql_update_callable)
+       #  updated_rows_count = sql_update_by_date_pondid(db_engine, table_name, out_df)
+       #  print('Successfully updated scorecard data into db, rows:', updated_rows_count)
+
+    # def load_scorecard_data(self, excel_filename):
+    #     ponds_list = self.ponds_list
+        
+    #     print('Loading scorecard data...')
+    #     # Load the Daily Pond Scorecard excel file
+    #     excel_sheets = pd.ExcelFile(excel_filename)
+
+    #     # create a dict containing a dataframe for each pond sheet
+    #     all_ponds_data = {}
+    #     for i in ponds_list:
+    #         try:
+    #             all_ponds_data[i] = excel_sheets.parse(i)
+    #         except:
+    #             print('Failed to load data for pond:', i)
+
+    #     # clean the pond data (convert data from string to datetime, set date as index, drop empty columns   
+    #     updated_ponds_data = {} # dict for storing cleaned data
+    #     for key in enumerate(all_ponds_data.keys()):
+    #         df = all_ponds_data[key[1]]
+    #         df = df.rename(columns={df.columns[0]:'date'})
+    #         df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
+    #         df = df.dropna(subset=['date']) # drop rows that don't contain a date/valid date
+    #         df = df.set_index(df['date'].name) # set date column as index
+    #         df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
+    #         updated_ponds_data[key[1]] = df # add updated df to new dict of pond dataframes, which will later overwrite original 
+    #     print('Scorecard data loaded!')
+    #     return updated_ponds_data # return the cleaned data dict
+    
+    # def load_processing_data(self, excel_filename):
+    #     print('Loading processing data')
+    #     df = pd.read_excel(excel_filename, sheet_name='SF Harvest')
+    #     df = df.rename(columns={df.columns[0]:'date'})
+    #     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
+    #     df = df.set_index(df['date'].name) # set date column as index
+    #     df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
+    #     print('Processing data loaded!')
+    #     return df
+    
+    # def load_sfdata(self, excel_filename):
+    #     print('Loading SF Data')
+    #     df = pd.read_excel(excel_filename, sheet_name='Customer Log')
+    #     df = df.rename(columns={df.columns[0]:'date'})
+    #     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
+    #     df = df.set_index(df['date'].name) # set date column as index
+    #     df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
+    #     print('SF data loaded!')
+    #     return df 
+    
+    # def load_epa_data(self, excel_epa_data_filenames: list, debug_print=False) -> dict:
+    #     ponds_list = self.ponds_list
+    #     select_date = self.select_date
+        
+    #     def process_excel_file(excel_filename):
+    #         # create a dict with an empty list for each pond number (to store date and epa value)
+    #         ponds_data_dict = {k: {} for k in ponds_list} 
+            
+    #         # load epa_data spreadsheet  
+    #         epa_df = pd.read_excel(excel_filename, sheet_name="Sheet1", header=None)
+
+    #         # check which file is being loaded (2 different sources currently)
+    #         if 'epa_data1.xlsx' in excel_filename: # checking if this is the primary data source (from self lab testing)
+    #             # parse the first 4 columns to update header (since excel file col headers are on different rows/merged rows)
+    #             epa_df.iloc[0:4] = epa_df.iloc[0:4].fillna(method='bfill', axis=0) # backfill empty header rows in the first 4 header rows, results in header info copied to first row for all cols
+    #             epa_df.iloc[0] = epa_df.iloc[0].apply(lambda x: ' '.join(x.split())) # remove extra spaces from the strings in the first column
+    #             epa_df.columns = epa_df.iloc[0] # set header row
+    #             epa_df = epa_df.iloc[4:] # delete the now unnecessary/duplicate rows of header data
+
+    #             # process each row using Pandas vectorization and list comprehension rather than looping for better processing efficiency
+    #             # process in reverse order to check for most-recent samples first
+    #             [process_epa_row(a, b, ponds_data_dict) for a, b in (zip(epa_df['Sample type'][::-1], epa_df['EPA % AFDW'][::-1]))]
+
+    #         elif 'epa_data2.xlsx' in excel_filename: #chck if it's the secondary data source (from third party lab)
+    #             epa_df.columns = epa_df.iloc[0] # convert first row to column header
+    #             epa_df = epa_df.iloc[1:] # delete the first row since it's now converted to column headers
+
+    #             # process each row using Pandas vectorization and list comprehension rather than looping for better processing efficiency
+    #             # process in reverse order to check for most-recent samples first
+    #             [process_epa_row(a, b, ponds_data_dict, convert_val_from_decimal_to_percentage=True) for a, b in (zip(epa_df['Sample'][::-1], epa_df['C20:5 Methyl eicosapentaenoate (2734-47-6), 10%'][::-1]))]     
+
+    #         # Iterate through ponds_data_dict, and average the EPA values for each date (when there is more than one value per date)
+    #         for idx, (pond_name, single_pond_data) in enumerate(ponds_data_dict.copy().items()):
+    #             # get the average EPA of all values for each day (or will just convert to a float for a single value)
+    #             for idx2, (date_key, epa_vals) in enumerate(single_pond_data.items()): 
+    #                 ponds_data_dict[pond_name][date_key] = sum(epa_vals) / len(epa_vals)
+    #             # resort the dict just to be certain that the most-recent date is first (in case the source data isn't in correct order)
+    #             # and trim data to last 3 most-recent data points
+    #             ponds_data_dict[pond_name] = dict(sorted(ponds_data_dict[pond_name].items(), reverse=True)[:3]) 
+            
+    #         return ponds_data_dict 
+        
+    #     def process_epa_row(sample_label, epa_val, ponds_data_dict, convert_val_from_decimal_to_percentage=False):    
+    #         if debug_print:
+    #             print(sample_label, end=' | ')
+        
+    #         if type(sample_label) != str:
+    #             if debug_print:
+    #                 print('ERROR: sample label not a string')
+    #             return
+            
+    #         # search for pond name in sample_label with regex (looking for 4 digits surrounded by nothing else or whitespace)
+    #         # regex ref: https://stackoverflow.com/questions/45189706/regular-expression-matching-words-between-white-space
+    #         pondname_search = re.search(r'(?<!\S)\d{4}(?!\S)', sample_label)
+    #         if pondname_search:
+    #             pond_name = pondname_search.group()
+    #         else:
+    #             # check for pond name with alternate data source (epa_data2.xlsx), where some of the pond names are represented with only 3 digits, missing a leading 0 (e.g., 301 - means '0301') 
+    #             pondname_search = re.search(r'(?<!\S)\d{3}(?!\S)', sample_label)
+    #             if pondname_search:
+    #                 pond_name = pondname_search.group()
+    #                 pond_name = '0' + pond_name
+    #             else:
+    #                 if debug_print:
+    #                     print('ERROR: no pond name found in sample label')
+    #                 return
+            
+    #         # search for date in sample_label with regex (looking for 6 digits surrounded by nothing else or whitespace)
+    #         date_search = re.search(r'(?<!\S)\d{6}(?!\S)',sample_label)
+    #         if date_search:
+    #             date = datetime.strptime(date_search.group(), "%y%m%d")
+    #             diff_days = (select_date-date).days
+    #             # check if select date is before the epa value date (in which case this epa data row should be skipped to ensure that the report is using data relative to the select_date)
+    #             # or if the epa value date is over 60 days older than the select_date, in which case it should also be skipped because the data is too old to be useful
+    #             if diff_days < 0 or diff_days > 60:
+    #                 if debug_print:
+    #                     print(f'ERROR: sample date after \'{select_date}\' or sample over 60 day threshold')
+    #                 return
+    #         else:
+    #             if debug_print:
+    #                 print('ERROR: no date found in sample label')
+    #             return
+
+    #         try:
+    #             epa_val = float(epa_val)
+    #         except:
+    #             if debug_print:
+    #                 print('ERROR: EPA val is not a valid number')
+    #             return
+
+    #         # check if pond number exists as a key in pond data, ignore this data line if not    
+    #         if pond_name not in ponds_data_dict:
+    #             print('EPA KEY ERROR:', pond_name)
+    #             return 
+            
+    #         # convert epa val from decimal to percentage (i.e., 0.01 -> 1.00)
+    #         if convert_val_from_decimal_to_percentage:
+    #             epa_val *= 100
+            
+    #         # add epa values for each date (check if a key-value pair already exists for appending multiple values if necessary, to calculate an average later)
+    #         if date not in ponds_data_dict[pond_name]:
+    #             ponds_data_dict[pond_name][date] = [epa_val]
+    #         else:
+    #             ponds_data_dict[pond_name][date].append(epa_val)
+            
+    #         if debug_print:
+    #             print('SUCCESS', date, pond_name, epa_val)
+            
+    #     def merge_epa_data(epa_dict1, epa_dict2) -> dict:
+    #         ''' 
+    #         Copies EPA data from epa_dict2 into epa_dict1
+    #         These should each already have unique values for the dict[date] key, so 
+    #         If any duplicate data exists for epa values on any date, then take the average of the two values from each dict
+    #         '''
+    #         combined_dict = epa_dict1
+    #         # add merge dict2 with dict1, checking for duplicate 'pond_name' keys, then 'date' keys within that subdict if it already exists
+    #         for idx, (pond_name, pond_date_dict2) in enumerate(epa_dict2.items()):
+    #             if pond_name not in epa_dict1:
+    #                 # set nonexistent dict1 key/value equal to the dict2 key/val,
+    #                 # since this should already be averaged by day and sorted descending by load_epa_data(), 
+    #                 # then there is no need for further processing
+    #                 epa_dict1[pond_name] = pond_date_dict2 
+    #             else:
+    #                 # append dict2 keys and values to dict1 existing values
+    #                 # enumerate throught the subdict and check if the key (date) already exists in dict1
+    #                 for idx, (date, epa_val2) in enumerate(pond_date_dict2.items()):
+    #                     if date not in epa_dict1[pond_name]:
+    #                         # add the epa_val to this date key in dict1 since it does not already exist
+    #                         epa_dict1[pond_name][date] = epa_val2 
+    #                     else:
+    #                         # get the average of dict1 and dict2 values then set it as dict1 value,
+    #                         # since each of the input dicts should already only have 1 value for each date,
+    #                         # then can average them at this step
+    #                         epa_val1 = epa_dict1[pond_name][date]
+    #                         epa_dict1[pond_name][date] = (epa_val1 + epa_val2) / 2
+    #                 # re-sort and filter to only 3 most-recent dates since data for this dict was modified
+    #                 epa_dict1[pond_name] = dict(sorted(epa_dict1[pond_name].items(), reverse=True)[:3]) 
+    #         return epa_dict1
+             
+    #     print('Loading EPA data...')
+    #     tmp_list = []
+    #     for excel_filename in excel_epa_data_filenames:
+    #         tmp_list.append(process_excel_file(excel_filename))
+    #     print('EPA data loaded!')
+    #     return merge_epa_data(tmp_list[0], tmp_list[1]) 
+        
+        
+    # # helper function to check if a pond has data from prior n-days from the selected date 
+    # # checking if there is data in the 'Fo' column up to n-days (num_days_prior)
+    # def generate_active_dict(self, pond_scorecard_data, num_days_prior):
+    #     ponds_list = self.ponds_list
+    #     select_date = self.select_date
+        
+    #     def check_active_query(pond_name, prev_day_n): 
+    #         try:
+    #             dat = pond_scorecard_data[pond_name][['Fo', 'Split Innoculum', 'Comments']].shift(prev_day_n).loc[select_date]
+    #             # check if pond is noted as "I" for inactive in the "Split Innoculum" column, or some variation of 'harvest complete' in the "Comments" column
+    #             # if so, break immediately and return False in the outer function (return that the particular pond is "inactive")
+    #             if str(dat[1]).upper() == 'I' or any(x in str(dat[2]).lower() for x in ['harvest complete', 'complete harvest', 'complete transfer']): 
+    #                 return 'FalseBreakImmediate'
+    #             elif pd.isna(dat[0]) or dat[0] == 0: # if 'Fo' data is NaN or 0
+    #                 return False
+    #             else:
+    #                 return True  # return true since it can be assumed the dat[0] column contains a value if execution passed the prior conditional checks
+    #         except:
+    #             return False # return false if querying the dataframe resulted in an error
+        
+    #     # iterate through the ponds_list and create a dict entry for whether that pond is active (val = True) or not (val = False)
+    #     active_ponds_dict = {}
+    #     for p in ponds_list:
+    #         for n in range(0,num_days_prior+1):
+    #             prev_n_day_active = check_active_query(p, n)
+    #             # if pond is found to be active, set val to True and break from iterating through the range of 'num_days_prior'
+    #             if prev_n_day_active == True:
+    #                 active_ponds_dict[p] = True 
+    #                 break
+    #             # if 'FalseBreakImmediate' condition or when the last 'n' day in num_days prior is found to be inactive, then set val to False and break loop (break isn't really necessary for the second case since it should be the end of the loop anyway)
+    #             elif prev_n_day_active == 'FalseBreakImmediate' or (n == num_days_prior and prev_n_day_active == False):
+    #                 active_ponds_dict[p] = False
+    #                 break
+    #             # if the prev 'n' day is not active, but still have more days to check, then do nothing on this loop iteration
+    #             else:
+    #                 pass
+    #     return active_ponds_dict

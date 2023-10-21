@@ -8,7 +8,7 @@ from . import load_setting, EmailHandler
 from .ms_account_connect import MSAccount, M365ExcelFileHandler
 
 def get_db_table_columns(db_engine: sqlalchemy.Engine, table_name) -> list:
-    table = sqlalchemy.Table(table_name, sqlalchemy.MetaData(), autoload_with=db_engine)
+    table = load_table(db_engine, table_name)
     inspector = sqlalchemy.inspect(table)
     return [col.name for col in inspector.columns]
 
@@ -60,7 +60,7 @@ def load_table(db_engine: sqlalchemy.Engine, table_name: str) -> sqlalchemy.Tabl
     metadata = sqlalchemy.MetaData()
     return sqlalchemy.Table(table_name, metadata, autoload_with=db_engine)
     
-def query_data_table_by_date(db_name: str, table_name: str, query_date: datetime, col_names: list | None = None) -> pd.DataFrame:
+def query_data_table_by_date(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date: datetime, col_names: list | None = None) -> pd.DataFrame:
     '''
     Helper function to query data from a database table for a specified date
 
@@ -76,7 +76,12 @@ def query_data_table_by_date(db_name: str, table_name: str, query_date: datetime
     --------
     pd.DataFrame
     '''
-    db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
+    # check if db_name_or_engine is a sqlalchemy.Engine instance...otherwise load the engine
+    if not isinstance(db_name_or_engine, sqlalchemy.Engine):
+        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
+    else:
+        db_engine = db_name_or_engine
+
     query_date = query_date.strftime("%Y-%m-%d")
     if not check_if_table_exists(db_engine, table_name):
         print(f'ERROR: Could not load {table_name} from database: {db_name}!')
@@ -89,7 +94,7 @@ def query_data_table_by_date(db_name: str, table_name: str, query_date: datetime
                 output = conn.execute(sqlalchemy.select(table_obj).where(table_obj.c["Date"] == query_date)).fetchall()
             return pd.DataFrame(output, columns=col_names)
 
-def query_data_table_by_date_range(db_name: str, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None) -> pd.DataFrame:
+def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None) -> pd.DataFrame:
     '''
     Helper function to query data from a database table for a specified date
 
@@ -106,7 +111,12 @@ def query_data_table_by_date_range(db_name: str, table_name: str, query_date_sta
     --------
     pd.DataFrame
     '''
-    db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
+    # check if db_name_or_engine is a sqlalchemy.Engine instance...otherwise load the engine
+    if not isinstance(db_name_or_engine, sqlalchemy.Engine):
+        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
+    else:
+        db_engine = db_name_or_engine
+        
     query_date_start = query_date_start.strftime("%Y-%m-%d")
     query_date_end = query_date_end.strftime("%Y-%m-%d")
 

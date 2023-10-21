@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import os
 import re
+from pathlib import Path
 from typing import Type
 from datetime import datetime
 from O365 import Account, FileSystemTokenBackend
@@ -153,8 +154,18 @@ class MSAccount(object):
                                              msg_body=error_msg) 
         return None
     
-    def download_sharepoint_file_by_id(self, object_id):
-        return self.get_sharepoint_file_by_id(object_id).download()
+    def download_sharepoint_file_by_id(self, object_id: str, to_path: Path) -> Path|None:
+        file_obj = self.get_sharepoint_file_by_id(object_id)
+        dl_success = file_obj.download(to_path=to_path) # returns True if success, False if failure
+        if dl_success:
+            file_path = to_path / file_obj.name
+            if os.path.isfile(file_path):
+                return file_path
+            else:
+                file_path.unlink() # delete whatever exists if it isn't a valid file
+                return None
+        else:
+            return None
 
     def send_email(self, recipients, subject, msg_body, attachments=[]):
         message = self.account_connection.mailbox().new_message()
@@ -168,7 +179,7 @@ class MSAccount(object):
         print('Email successfully sent!')
         
 class M365ExcelFileHandler:
-    def __init__(self, file_object_id: str, load_data: bool, load_sheets: list = [], ignore_sheets: list = [], dl=False):
+    def __init__(self, file_object_id: str, include_sheets: list = [], ignore_sheets: list = [], load_data: bool = False, data_get_method: str = "DL", load_sheet_kwargs: dict = {}):
         '''
         - Extracts data from excel workbooks with M365 API and loads into pandas dataframes 
         - Dataframes are stored in self.data, with keys set as sheet names 
@@ -180,13 +191,14 @@ class M365ExcelFileHandler:
             - data_handling_method: (for collecting information and raw data from file)
                     - 'api' (any case): data is only accessed through the MS Graph API, no data files are locally downloaded. This tends to be slower than just downloading the files and gathering data from there
                     - 'dl': download data locally for processing file (but actual manipulation/updating of file on O365 will be through API calls, rather than just re-uploading the file) [NEED TO TEST SPEED OF RE-UPLOAD VS API CALLS FOR SIGNIFICANT CHANGES]
-            - load_sheets: 
+            - include_sheets: 
                     - list of sheets to load (skips sheets that are present in workbook but not specified)
             - ignore_sheets:
                     - list of sheets to ignore, loads every other sheet present in the workbook
-            ** load_sheets and ignore_sheets parameters are mutually exclusive (i.e., one must be empty if the other is populated)
-            ** if neither load_sheets or ignore_sheets parameters are populated, then default will load all sheets
-
+                    - OPTIONAL: include "SUBSTRING[string]" to filter out sheet names that contain a substring
+            - load_last_n_rows: bool: load the most recent "n" rows from the file if an int is specified; otherwise, loads all rows
+            ** include_sheets and ignore_sheets parameters are mutually exclusive (i.e., one must be empty if the other is populated)
+            ** if neither include_sheets or ignore_sheets parameters are populated, then default will load all sheets
         '''
         print(f'Loading file: {file_object_id}', end='...', flush=True)
         print(f'loading data = {load_data}', end='...', flush=True)
@@ -202,26 +214,52 @@ class M365ExcelFileHandler:
         self._worksheet_names_valid = [str(s).replace('Worksheet: ', '') for idx, s in enumerate(self._wb.get_worksheets())]
 
         self._worksheet_names_load = [] # init empty list to store worksheet names to load
-        if len(load_sheets) > 0 and len(ignore_sheets) > 0:
-            raise Exception('Either "load_sheets" or "ignore_sheets" parameter can be used, but not both!')
-        elif len(load_sheets) > 0:
-            # case when load_sheets specified
-            print(f'loading sheet{"s" if len(load_sheets) > 1 else ""}: {str(*load_sheets)}', end='...', flush=True)
-            [self._worksheet_names_load.append(sheet) if sheet in self._worksheet_names_valid else print(f'ERROR: worksheet "{sheet}" is not contained in file: {file_object_id}. Skipping...') for sheet in load_sheets]
+        if len(include_sheets) > 0 and len(ignore_sheets) > 0:
+            raise Exception('Either "include_sheets" or "ignore_sheets" parameter can be used, but not both!')
+        elif len(include_sheets) > 0:
+            # case when include_sheets specified
+            print(f'loading sheet{"s" if len(include_sheets) > 1 else ""}: {str(*include_sheets)}', end='...', flush=True)
+            [self._worksheet_names_load.append(sheet) if sheet in self._worksheet_names_valid else print(f'ERROR: worksheet "{sheet}" is not contained in file: {file_object_id}. Skipping...') for sheet in include_sheets]
         elif len(ignore_sheets) > 0:
             # case when ignore_sheets specified
-            print(f'ignoring sheet{"s" if len(ignore_sheets) > 1 else ""}: {str(*ignore_sheets)}', end='...', flush=True)
-            [self._worksheet_names_load.append(sheet) if sheet not in ignore_sheets else None for sheet in self._worksheet_names_valid ]
+            print(f'ignoring sheet{"s" if len(ignore_sheets) > 1 else ""}: {*ignore_sheets,}', end='...', flush=True) ## KEEP COMMA AFTER UNPACKED LIST IN F-STRING!! REMOVING IT WILL RESULT IN A SYNTAX ERROR
+            #[self._worksheet_names_load.append(sheet) if sheet not in ignore_sheets else None for sheet in self._worksheet_names_valid ]
+            [self._worksheet_names_load.append(sheet) for sheet in self._worksheet_names_valid ] # populate a list of all sheets to load, remove the sheets to ignore in next lines
+            for sheet_name in self._worksheet_names_load.copy():
+                for ignore_name in ignore_sheets:
+                    substring_search = re.search(r'SUBSTRING\[(.+)\]', ignore_name)
+                    if substring_search:
+                        search_str = substring_search.group(1)
+                        if search_str in sheet_name:
+                            self._worksheet_names_load.remove(sheet_name)
+                            break
+                    else:
+                        if sheet_name == ignore_name:
+                            self._worksheet_names_load.remove(sheet_name)
+                            break
         else:
-            # default case (nothing provided for load_sheets or ignore_sheets
+            # default case (nothing provided for include_sheets or ignore_sheets
             [self._worksheet_names_load.append(sheet) for sheet in self._worksheet_names_valid]
 
         print('\n')
+
+        # download data file if data_get_method = "DL"
+        # download at this step versus when parsing data for each sheet
+        if load_data == True and data_get_method == 'DL':
+            dl_file_path = self._account.download_sharepoint_file_by_id(self._file_id, to_path=Path(f'data_sources/tmp/'))
+            if dl_file_path: # will be None if error downloading
+                self._downloaded_excel_file = pd.ExcelFile(dl_file_path.as_posix())
+                dl_file_path.unlink() # delete file after it's loaded
+            else:
+                raise Exception(f'Download error for file_id: {self._file_id}!')
+
         # collect data for sheets
-        if dl == False:
-            self.sheet_data = {sname: self._get_sheet_data_api(sname, _get_df=load_data) for sname in self._worksheet_names_load}
-        else:
-            self.sheet_data = {sname: self._get_sheet_data_dl(sname) for sname in self._worksheet_names_load}
+        self.sheet_data = {sname: self.get_sheet_data(sname, **load_sheet_kwargs) for sname in self._worksheet_names_load}
+        
+        # if dl == False:
+        #     self.sheet_data = {sname: self._get_sheet_data_api(sname, get_df=load_data) for sname in self._worksheet_names_load}
+        # else:
+        #     self.sheet_data = {sname: self._get_sheet_data_dl(sname) for sname in self._worksheet_names_load}
                                
         print('File loaded!')
 
@@ -231,32 +269,13 @@ class M365ExcelFileHandler:
         '''
         self._wb.session.close_session()
     
-    def _get_sheet_data_dl(self, sheet_name):
+    def get_sheet_data(self, sheet_name: str, data_get_method: str = "DL", **kwargs):
         '''
-        Get worksheet data by downloading it instead of using API - faster for large files, or maybe all files
-        store self.downloaded_workbook
-        '''
-        print("TEST: LOADING DATA VIA DOWNLOAD!!")
-        if not hasattr(self, 'downloaded_workbook_file'):
-            dl_file_path = self._account.download_sharepoint_file_by_id(self._file_id)
-            self.downloaded_workbook_file = pd.ExcelFile(dl_file_path)
-        try:
-            df = self.downloaded_workbook_file.parse(sheet_name)
-        except:
-            raise Exception(f'ERROR: could not get "{sheet_name}" from file id: {self._file_id}')
-        
-        return_data = object() # empty container to store return data
-        return_data.name = sheet_name
-        return_data.df = df
-        #TODO return_data.used_range = 
-        #TODO return_data.max_row = 
-        #TODO return_data.max_col = 
-        #TODO return_data.column_to_name_map =
-        return return_data
-        
-    def _get_sheet_data_api(self, sheet_name: str, _get_df: bool = False):
-        '''
-        Sheet variables: 
+        Params:
+            - sheet_name: str: the specific sheet name to load, must match sheet name in Excel file
+            - load_data: True or False: whether to load the data into a Pandas dataframe; otherwise, will just get general info about the sheet used range
+            - get_method: "API" or "DL", defaults to DL
+        Sheet variables to return: 
             - sheet: O365.excel.WorkBook.WorkSheet object
             - sheet.name: worksheet name
             - sheet.used_range: range of data within the sheet
@@ -268,72 +287,111 @@ class M365ExcelFileHandler:
             - handle leading empty columns
             - column to datatype mapping???
             - handle sheets with weird headers (multiple rows, etc)???
-        '''
-        def test_scan_for_dt(sheet, nrows=25):
-            scan_range = f'A1:{sheet.max_col}{nrows}'
-            scan_data = sheet.get_range(scan_range)
-            scan_values = scan_data.values
-            scan_text = scan_data.text
-            output = {'dt_cols': [], 'dt_problem_cols': []}
-            for col_idx, col_name in enumerate(scan_values[0]):
-                print(f'\nChecking column: {col_idx}')
-                col_dt_count = 0
-                col_dt_problem_count = 0 
-                for row_idx in range(1, len(scan_values)):
-                    print(f'Checking row: {row_idx}')
-                    # if the "value" representation of the cell is different from the "text" representation
-                    # AND if the value is an integer, then it might be a datetime value
-                    test_value = scan_values[row_idx][col_idx]
-                    test_text = scan_text[row_idx][col_idx]
-                    try: 
-                        test_text_value = float(test_text)
-                    except:
-                        ### DO SOMETHING HERE???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-                        pass
-                    print('Value & Text equal:', str(test_value) == test_text)
-                    if str(test_value) == test_text:
-                        print('...breaking...')
-                        break
-                    elif test_value == float(test_text):
-                        ### DO SOMETHING HERE???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
-                        pass
-                    else:
-                        # check if the value can be converted into a date
-                        from xlrd import xldate_as_datetime
-                        dt_val = xldate_as_datetime(test_value, datemode=False)
-                        if not isinstance(dt_val, datetime):
-                            # stop enumerating rows if any non-datetime values are found 
-                            break 
-                        elif (dt_val.year < datetime.now().year - 100 or dt_val.year > datetime.now().year + 100):
-                            print(f'Invalid found: {test_value}, {test_text}, {dt_val}')
-                            # track if any invalid datetime values are found (with invalid meaning that the values convert to datetime correctly but are out of the +-100 year of current year range, so probably not actually a datetime value)
-                            # and keep track of those columns separately from datetime columns (so that values are fetched as the .text version for this column)
-                            col_dt_problem_count += 1  
-                        else:
-                            print(dt_val)
-                            print('test for valid dt', not (dt_val.year < datetime.now().year - 100 or dt_val.year > datetime.now().year + 100), f'value: {dt_val.year} (range: {datetime.now().year - 100} - {datetime.now().year + 100})')  
-                            col_dt_count += 1
-                if col_dt_count == nrows - 1:
-                    print(f'Found datetime column on sheet: {sheet.name}, column: {col_idx}')
-                    output['dt_cols'].append(col_idx) # add column index to output (will only get to this point if all values checked in column are valid datetime)
-                elif col_dt_problem_count == nrows -1:
-                    print(f'Found PROBLEMATIC datetime column on sheet: {sheet.name}, column: {col_idx}')
-                    output['dt_problem_cols'].append(col_idx) 
-            return output
-                    
+        '''             
         sheet = self._wb.get_worksheet(sheet_name)
         sheet.name = sheet_name
-        sheet.used_range, sheet.max_row, sheet.max_col = self._sheet_get_used_range_fixed(sheet)
-        if sheet.used_range != None:
-            _column_headers = sheet.get_range(f'A1:{sheet.max_col}1').values[0]
-            sheet.column_to_name_map = {self._convert_numeric_col_to_alphabetic(idx):col_name for (idx, col_name) in enumerate(_column_headers, start=1) if col_name != ''}
-            sheet.dt_cols = test_scan_for_dt(sheet)
-            if _get_df:
-               # sheet.df = pd.DataFrame(sheet.get_range(sheet.used_range).values)
-                sheet.df = self._load_excel_sheet_to_df(sheet)
-        # return every variable in locals() except those that are preceeded by a "_" character
+        if data_get_method.upper() == 'DL':
+            sheet.df = self._load_excel_sheet_to_df_download(sheet, **kwargs)
+        elif data_get_method.upper() == 'API':
+            sheet.df = self._load_excel_sheet_to_df_api(sheet, **kwargs)
+        else:
+            raise Exception(f'Invalid "get_method" specified for loading sheet: {sheet_name}!')
         return sheet
-      
+
+    def _load_excel_sheet_to_df_download(self, sheet: Type['O365.excel.WorkSheet'], **kwargs) -> pd.DataFrame:
+        df = self._downloaded_excel_file.parse(sheet.name, **kwargs)
+        print(f'loaded df for {sheet.name}...')
+        return df
+    
+    def _load_excel_sheet_to_df_api(self, sheet: Type['O365.excel.WorkSheet'], start_row: int|None = None, end_row: int|None = None) -> pd.DataFrame:
+        '''
+        - NOTE: VERY SLOW, PRETTY MUCH USELESS VERSUS DOWNLOADING AND PROCESSING FILE LOCALLY
+        - Loads a M365 sheet into a dataframe by querying data from API
+        - For very large sheets (exceeding 3,500,000 cells), then queries are split up, then collected and combined sequentially
+
+        params:
+            - sheet: O365.excel.WorkSheet object that has been processed to have sheet.name, sheet.column_to_name_map, sheet.max_row, sheet.max_col, sheet.min_row, sheet.min_col, and sheet.dt_cols properties)
+            - start_row (optional): the start row to extract data from (defaults to first row: 2 by Excel naming convention (with row 1 being header row that is always loaded))
+            - end_row (optional): the end row to extract data from (defaults to the last row of data)
+        ERROR: does not correctly convert datetime values
+        '''
+        sheet.used_range, sheet.max_row, sheet.max_col, sheet.min_row, sheet.min_col = self._sheet_get_used_range_fixed(sheet)
+        if sheet.used_range != None:        
+            _column_headers = sheet.get_range(f'{sheet.min_col}{sheet.min_row}:{sheet.max_col}{sheet.min_row}').values[0]
+            sheet.column_to_name_map = {self._convert_numeric_col_to_alphabetic(idx):col_name for (idx, col_name) in enumerate(_column_headers, start=1) if col_name != ''}
+            
+        # get column headers from row 1 (actually sheet.min_row, but should be row #1 most of the time) in excel file
+        _column_headers = sheet.get_range(f'{sheet.min_col}{sheet.min_row}:{sheet.max_col}{sheet.min_row}').values[0]
+
+        if not start_row:
+            start_row = int(sheet.min_row) + 1
+        if not end_row:
+            end_row = int(sheet.max_row)
+        
+        ''' 
+        MS API documentation claims that queries are limited to 5,000,000 cells, so split queries up as necessary for very large data sets
+        In reality, query limit seems to be 3,500,000 cells, so using that instead
+        '''
+        # calculate row limit (determined by number of columns)
+        row_query_limit = (3500000 / len(list(sheet.column_to_name_map.keys()))).__floor__()
+        
+        data_vals = [] # list to store data values, in case multiple queries need to be combined together
+        if end_row > row_query_limit:
+            query_ranges = [(i, i+row_query_limit-1) if i+row_query_limit-1 < end_row else (i, end_row) for i in range(start_row, end_row+1, row_query_limit)]
+            print('Too many queries, splitting up API data requests!!', query_ranges)
+            for (ql, qh) in query_ranges:
+                qrange = f'{sheet.min_col}{ql}:{sheet.max_col}{qh}'
+                data_vals.extend(sheet.get_range(qrange).values)
+        else:
+            data_vals.extend(sheet.get_range(f'{sheet.min_col}{start_row}:{sheet.max_col}{end_row}').values)
+
+        # Return pandas dataframe from query to data
+        df = pd.DataFrame(data_vals, columns=_column_headers)
+
+        # Find and convert any datetime columns before returning dataframe
+        # starting from row 1 (after column headers), every row through row 25 must convert into a valid date field 
+        # with year between 2017 and 2055, to be considered a valid datetime column
+        non_dt_cols = []
+        dt_cols = []
+        if not len(df) > 25:
+            print(f'Sheet {sheet.name} too short, skipping dt conversion for now...')
+        else:
+            for row_idx in range(1,26):
+                for col_idx, cell in enumerate(df.iloc[row_idx,:]):
+                    if col_idx in non_dt_cols:
+                        pass # pass on subsequent rows if a non-datetime column has been identified on a prior checked row
+                    # check if cell is an integer, then check if it can be converted into valid date with year being between 2017 and 2055
+                    if type(cell) == int:
+                        try:
+                            if pd.to_datetime(cell, unit='d', origin='1899-12-30').year in (range(2017,2056)):
+                                if col_idx not in dt_cols:
+                                    dt_cols.append(col_idx)
+                        except:
+                            if col_idx not in non_dt_cols:
+                                non_dt_cols.append(col_idx)
+                            if col_idx in dt_cols:
+                                dt_cols.pop(col_idx)
+                    else:
+                        if col_idx not in non_dt_cols:
+                            non_dt_cols.append(col_idx)
+                        if col_idx in dt_cols:
+                            dt_cols.pop(col_idx)
+            
+            # def convert_dt_or_pass(pandas_cell_val):
+            #     try:
+            #         return pd.to_datetime(pandas_cell_val, unit='d', origin='1899-12-30')
+            #     except:
+            #         return None
+            
+            for col in dt_cols:
+                # use .apply rather than applying to_datetime to the entire column at once
+                # do this to handle each row separately & pass on rows that don't conform
+                # (otherwise errors could prevent from applying to entire column at once)
+                # df.iloc[:, col] = df.iloc[:, col].apply(lambda x: convert_dt_or_pass(x))
+                df.iloc[:, col] = pd.to_datetime(df.iloc[:, col], unit='d', origin='1899-12-30', errors='coerce')
+                
+        return df
+        
     def _sheet_get_used_range_fixed(self, sheet: Type['O365.excel.WorkSheet']):
         ###### TODO contribute to O365 project to fix 'valuesOnly' parameter and filtering queries???
         url = sheet.build_url(sheet._endpoints.get('get_used_range'))
@@ -343,26 +401,21 @@ class M365ExcelFileHandler:
         full_range_str = sheet.range_constructor(parent=sheet, **{sheet._cloud_data_key: response.json()}).address #.split("!")[-1]  
         #print('Loading', full_range_str)
         trunc_range_str = full_range_str.split("!")[-1] 
+        
+        min_range_str = trunc_range_str.split(':')[0] # get the sheet coordinate start (i.e., for "A1:Z335", would extract "A1")
+        min_row = re.findall(r'\d+', min_range_str)[0] # returns as a list, get first item, should be the only one
+        min_col = re.findall(r'[a-zA-z]+', min_range_str)[0] 
+        
         max_range_str = trunc_range_str.split(':')[-1] # get the sheet coordinate extents (i.e., for "A1:Z335", would extract "Z335")
-        max_row = re.findall(r'\d+', max_range_str) # returns a list
-        max_col = re.findall(r'[a-zA-z]+', max_range_str)
-        if not (len(max_row)==1 and len(max_col) == 1): # check that range extents are valid (should only be a single group of numbers/alphabetic chars for each variable)
-            print(f'Error loading sheet "{sheet.name}". Skipping...')
-            full_range_str = trunc_range_str = max_range_str = max_row = max_col = None
-            #  try:
-            #max_range_str, max_row, max_col = self._find_last_row_brute_method(self._file_id, sheet) 
-          #  except:
-         #       raise Exception('ERROR: sheet range is not valid:', full_range_str)
-        else:
-           max_row = int(max_row[0])
-           max_col = max_col[0]
-       # print('Loaded...')
-        return trunc_range_str, max_row, max_col
+        max_row = re.findall(r'\d+', max_range_str)[0] # returns as a list, get first item, should be the only one
+        max_col = re.findall(r'[a-zA-z]+', max_range_str)[0]
+        
+        return trunc_range_str, max_row, max_col, min_row, min_col
 
     def _find_last_row_brute_method(self, file_object_id: str, sheet: Type['O365.excel.WorkSheet']):
         '''
         Get the last row through repeatedly requesting one row at a time from the MS Graph API
-        *** THIS METHOD IS SLOW DUE TO REPEATED API REQUESTS FOR EACH SHEET, USE AS A LAST RESORT ONLY (should only be necessary for massive sheets that break the API) ***
+        *** THIS METHOD IS SLOW DUE TO REPEATED API REQUESTS FOR EACH SHEET, USE AS A LAST RESORT ONLY (should only be necessary for massive sheets that otherwise break the API) ***
         First, look at one row at a time, and exponentially increase the row number looking at, until an empty row is found
         Second, once an empty row is found, then iteratively check mid-point rows between row_search_low (the highest nonempty row found at each iteration), 
             and row_search_high (the upper bound for searching), until the number  of rows in the search bound is less than 1000.
@@ -478,43 +531,8 @@ class M365ExcelFileHandler:
                     # since an empty bound has been found, then backtrack high bound by half the difference bwtween high and low bounds /
                     # to gradually narrow the search band for the last nonempty row
                     row_search_high = ((row_search_high - row_search_low)/2).__floor__() + row_search_low
+
     
-    def _load_excel_sheet_to_df(self, sheet: Type['O365.excel.WorkSheet']):
-        '''
-        - Loads a M365 sheet into a dataframe by querying data from API
-        - For very large sheets (exceeding 3,500,000 cells), then queries are split up, then collected and combined sequentially
-
-        ERROR: does not correctly convert datetime values
-        '''
-        # Get the last non-empty column letter 
-        # BASED FIRST ROW DATA ONLY - generated from _get_column_mapping() which checks 5000 columns in 1st row
-        if len(sheet.column_to_name_map) > 0:
-            last_col_letter = list(sheet.column_to_name_map.keys())[-1]
-        else: 
-            last_col_letter = 'A'
-
-        ''' 
-        MS API claims queries are limited to 5,000,000 cells, so split queries up as necessary for very large data sets
-        In reality, query limit seems to be 3,500,000 cells, so using that instead
-        '''
-        # calculate row limit (determined by number of columns)
-        row_query_limit = (3500000 / len(list(sheet.column_to_name_map.keys()))).__floor__()
-        last_row_number = sheet.max_row
-
-        data_vals = [] # list to store data values, in case multiple queries need to be combined together
-        if last_row_number > row_query_limit:
-            query_ranges = [(i, i+row_query_limit-1) if i+row_query_limit-1 < last_row_number else (i, last_row_number) for i in range(1, last_row_number+1, row_query_limit)]
-           # print('ERROR too many queries!!', query_ranges)
-            for (ql, qh) in query_ranges:
-                qrange = f'A{ql}:{last_col_letter}{qh}'
-                #print('TESTTESTTESTTEST', qrange)
-                data_vals.extend(sheet.get_range(qrange).values)
-        else:
-            data_vals.extend(sheet.get_range(f'A1:{last_col_letter}{last_row_number}').values)
-            
-        # Return pandas dataframe from query to data, using 'last_col_letter' and 'last_row_number' as limits
-        return pd.DataFrame(data_vals[1:], columns=data_vals[0])
-        
     # def _get_column_mapping_api(self, sheet: Type['O365.excel.WorkSheet']):
     #     '''
     #     Get column mapping (col number to alphabetic, and alphabetic to col number) for by checking for data in the first row

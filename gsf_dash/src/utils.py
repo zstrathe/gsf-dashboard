@@ -4,6 +4,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 import email
 from datetime import datetime
+from pathlib import Path
+import sys
 
 # load auth credentials & settings from settings.cfg file
 def load_setting(specified_setting):
@@ -59,8 +61,23 @@ def generate_multipage_pdf(fig_list, pdf_filename, add_pagenum=True, bbox_inches
             pdf.savefig(bbox_inches=bbox_inches)  # saves the current figure into a pdf page
             plt.close()
     return pdf_filename
-
     
+''' Decorator to temporarily redirect stdout to a file '''
+def redirect_logging_to_file(log_file_directory: Path, log_file_name: str):
+    def decorator(function):
+        def func_wrapper(*args, **kwargs):
+            log_file = log_file_directory / log_file_name
+            log_file_path = log_file.as_posix() # convert log_file into a string of the file path
+            print(f'Redirecting stdout log to: {log_file_path}...')
+            from contextlib import redirect_stdout
+            with open(log_file_path, "w") as f:
+                with redirect_stdout(f):
+                    output = function(*args, **kwargs)
+            print(f'Stdout log saved...')
+            return output
+        return func_wrapper
+    return decorator
+
 class EmailHandler:
     def __init__(self):
         self.account = self.authenticate()

@@ -276,7 +276,7 @@ class ExpenseReport(BasePondsPlot):
         mtd_start = datetime(self.report_date.year, self.report_date.month, 1)
         
         # Query ytd expense data from DB, returns a pandas dataframe of data for each day and each pond
-        self.ytd_expense_data = query_data_table_by_date_range(db_name= 'gsf_data', table_name='ponds_data_expenses', query_date_start=ytd_start, query_date_end=report_date)
+        self.ytd_expense_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_expenses', query_date_start=ytd_start, query_date_end=report_date)
         
         # get mtd expense data by filtering ytd_expense data
         self.mtd_expense_data = self.ytd_expense_data[self.ytd_expense_data['Date'] >= mtd_start.strftime('%Y-%m-%d')]
