@@ -78,13 +78,13 @@ def query_data_table_by_date(db_name_or_engine: str|sqlalchemy.Engine, table_nam
     '''
     # check if db_name_or_engine is a sqlalchemy.Engine instance...otherwise load the engine
     if not isinstance(db_name_or_engine, sqlalchemy.Engine):
-        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
+        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name_or_engine}.db", echo=False)
     else:
         db_engine = db_name_or_engine
 
     query_date = query_date.strftime("%Y-%m-%d")
     if not check_if_table_exists(db_engine, table_name):
-        print(f'ERROR: Could not load {table_name} from database: {db_name}!')
+        print(f'ERROR: Could not load {table_name} from database: {db_name_or_engine}!')
     else:
         table_obj = load_table(db_engine, table_name)
         with db_engine.begin() as conn:
@@ -113,7 +113,7 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
     '''
     # check if db_name_or_engine is a sqlalchemy.Engine instance...otherwise load the engine
     if not isinstance(db_name_or_engine, sqlalchemy.Engine):
-        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
+        db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name_or_engine}.db", echo=False)
     else:
         db_engine = db_name_or_engine
         
@@ -126,7 +126,7 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
         col_names.insert(0,'Date')
     
     if not check_if_table_exists(db_engine, table_name):
-        print(f'ERROR: Could not load {table_name} from database: {db_name}!')
+        print(f'ERROR: Could not load {table_name} from database: {db_name_or_engine}!')
     else:
         table_obj = load_table(db_engine, table_name)
         with db_engine.begin() as conn:
@@ -135,7 +135,7 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
             else:
                 output = conn.execute(sqlalchemy.select(table_obj).where((table_obj.c["Date"] >= query_date_start) & (table_obj.c["Date"] <= query_date_end))).fetchall()
             if len(output) == 0:
-                raise Exception(f'ERROR: could not query data from db for db_name: {db_name}, table_name: {table_name}, query_date_start: {query_date_start}, query_date_end: {query_date_end}, col_names: {col_names}')
+                raise Exception(f'ERROR: could not query data from db for db_name: {db_name_or_engine}, table_name: {table_name}, query_date_start: {query_date_start}, query_date_end: {query_date_end}, col_names: {col_names}')
             return pd.DataFrame(output, columns=col_names)
 
 ##### unused
