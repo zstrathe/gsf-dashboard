@@ -53,10 +53,10 @@ def main(argv):
         failure_notify_email_exit(f'Error downloading or loading data', tb)
 
     # TEMPORARY INTEGRATION OF NEW DATABASE LOADING METHODS
+    # LOADS DATE INTO DB FOR CURRENT DATE (AND 4 DAYS PRIOR, IN CASE OF DATA UPDATES AND/OR MISSED RUNS)
     try:
         from src.dataloader_NEW import Dataloader as Dataloader_NEW
-        db_dataloader = Dataloader_NEW(args.date) # NEED TO UPDATE TO USE datetime as date argument!!!
-        db_dataloader.load_daily_data_prev_n_days(prev_num_days_to_load=5, specify_date=date_dt)
+        db_dataloader = Dataloader_NEW(args.date, run=True) # NEED TO UPDATE TO USE datetime as date argument!!!
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error with loading daily data into db!', tb)

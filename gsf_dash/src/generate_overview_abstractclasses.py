@@ -25,7 +25,7 @@ class BasePondsPlot(ABC):
                 'small': self._FONTSIZE_BASE * 0.75,
                 'medium': self._FONTSIZE_BASE * 1.25,
                 'large': self._FONTSIZE_BASE * 1.75,
-                'title': 12 } # use a constant font size for title
+                'title': self._FONTSIZE_BASE * 1.75 } 
 
     @property
     def fontsize_base(self) -> int|float:
@@ -85,7 +85,7 @@ class BasePondsPlot(ABC):
         # Initialize figure
         plt_width = 8.27 #8.27
         plt_height = 11.69 # 11.69
-        scale_factor = 1
+        scale_factor = 2
         self.fig = plt.figure(figsize=(plt_width*scale_factor, plt_height*scale_factor))
         
         # setup GridSpec for subplots in a grid
@@ -94,7 +94,7 @@ class BasePondsPlot(ABC):
         plot_grid = gridspec.GridSpec(nrows=max(N_ROWS_SMALL, N_ROWS_LARGE)+N_EMPTY_ROWS_BOTTOM, ncols=N_COLS_SMALL+N_COLS_LARGE, figure=self.fig, left=0.06, right=0.94, top=0.93, bottom=0.2, wspace=0.05, hspace=0.1)
 
         title_date = self.report_date.strftime('%-m/%-d/%Y')
-        self.fig.suptitle(f'{self.report_title}\n{title_date}', fontweight='bold', fontsize=self.fontsizes['title'], y=0.98)
+        self.fig.suptitle(f'{self.report_title}\n{title_date}', fontweight='bold', fontsize=self.fontsizes['title'], y=0.97)
         
         # iterate through each subplot in the grid
         for idx, subplot_spec in enumerate(plot_grid):
@@ -267,23 +267,24 @@ class ExpenseReport(BasePondsPlot):
 
         # set custom report class parameters
         self.report_title = 'Expenses by Pond'
-        #self.fontsize_base = 6 # sets/overrides base fontsize
-        
-        data_col_names = ['uan32_cost', 'fert1034_cost', 'bleach_cost', 'co2_cost', 'trace_cost', 'iron_cost', 'cal_hypo_cost', 'benzalkonium_cost']
+        self.fontsize_base = 12 # sets/overrides base fontsize
         
         # get start dates for both MTD and YTD expenses
-        ytd_start = datetime(self.report_date.year, 9, 1)
-        mtd_start = datetime(self.report_date.year, self.report_date.month, 1)
+        ytd_month_start = 9
+        if report_date.month < ytd_month_start:
+            self.ytd_start = datetime(self.report_date.year - 1, ytd_month_start, 1)
+        else:
+            self.ytd_start = datetime(self.report_date.year, ytd_month_start, 1)
+        self.mtd_start = datetime(self.report_date.year, self.report_date.month, 1)
         
-        # Query ytd expense data from DB, returns a pandas dataframe of data for each day and each pond
-        self.ytd_expense_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_expenses', query_date_start=ytd_start, query_date_end=report_date)
+        # Query ytd expense & estimated harvested data from DB, returns a pandas dataframe of data for each day and each pond
+        self.ytd_expense_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_expenses', query_date_start=self.ytd_start, query_date_end=report_date)
+        self.ytd_harvest_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_calculated', query_date_start=self.ytd_start, query_date_end=report_date, col_names=['est_harvested', 'est_split'])
         
-        # get mtd expense data by filtering ytd_expense data
-        self.mtd_expense_data = self.ytd_expense_data[self.ytd_expense_data['Date'] >= mtd_start.strftime('%Y-%m-%d')]
-
-        # get daily expense data by filtering mtd_expense_data
-        self.day_expense_data = self.mtd_expense_data[self.mtd_expense_data['Date'] == report_date.strftime('%Y-%m-%d')]
-        
+        # get mtd expense & harvested data by filtering ytd_expense data
+        self.mtd_expense_data = self.ytd_expense_data[self.ytd_expense_data['Date'] >= self.mtd_start.strftime('%Y-%m-%d')]
+        self.mtd_harvest_data = self.ytd_harvest_data[self.ytd_harvest_data['Date'] >= self.mtd_start.strftime('%Y-%m-%d')]
+           
     def plot_each_pond(self, subplot_spec, pond_id, n_rows=5, n_cols=3):
         if 'BLANK' in pond_id:
             pass
@@ -292,18 +293,14 @@ class ExpenseReport(BasePondsPlot):
             subplot_grid = gridspec.GridSpecFromSubplotSpec(n_rows,n_cols,subplot_spec=subplot_spec, wspace=-0.01, hspace=-0.01) # slightly negative vert/horiz padding to eliminate spaces in subplot
             title_ax = plt.Subplot(self.fig, subplot_grid[:2,:])
             self.subplot_ax_format(title_ax, fill_color='lightgrey')
-            title_ax.text(0.5, 0.5, f'{pond_id}', ha='center', va='center', fontsize=self.fontsizes['medium']) # override the default fontsize 
+            title_ax.text(0.5, 0.5, f'{pond_id}', ha='center', va='center', fontsize=self.fontsizes['default']) # override the default fontsize 
             
             # Prep subplot data
             # call sum(numeric_only=True) first to sum each numeric column, then call sum() again on the resulting series of column subtotals, to get the overall sum of expenses for each pond
-            pond_day_expense = self.day_expense_data[self.day_expense_data['PondID'] == pond_id].sum(numeric_only=True).sum()
-            pond_day_expense = round(pond_day_expense, 2) # rounding, need to fix at the database level...
-            
-            pond_ytd_expense = self.ytd_expense_data[self.ytd_expense_data['PondID'] == pond_id].sum(numeric_only=True).sum()
-            pond_ytd_expense = round(pond_ytd_expense, 2) # rounding, need to fix at the database level...
-
             pond_mtd_expense = self.mtd_expense_data[self.mtd_expense_data['PondID'] == pond_id].sum(numeric_only=True).sum()
-            pond_mtd_expense = round(pond_mtd_expense, 2) # rounding, need to fix at the database level...
+            pond_ytd_expense = self.ytd_expense_data[self.ytd_expense_data['PondID'] == pond_id].sum(numeric_only=True).sum()
+            pond_mtd_harvested = self.mtd_harvest_data[self.mtd_harvest_data['PondID'] == pond_id].sum(numeric_only=True).sum()
+            pond_ytd_harvested = self.ytd_harvest_data[self.ytd_harvest_data['PondID'] == pond_id].sum(numeric_only=True).sum()
 
             # Get data subplot grid
             data_ax = plt.Subplot(self.fig,subplot_grid[2:, :])
@@ -312,23 +309,49 @@ class ExpenseReport(BasePondsPlot):
             # Plot subplot data, if there are expenses to show
             if pond_ytd_expense > 0:
                 # left justify categories
-                data_ax.text(0.15, 0.9, f'MTD:\nYTD:', ha='left', va='top', multialignment='left', fontsize=self.fontsizes['medium'])
+                data_ax.text(0.05, 0.9, f'MTD Expense:\nMTD Calc Harvested:\n\nYTD Expense:\nYTD Calc Harvested:', ha='left', va='top', multialignment='left', fontsize=self.fontsizes['small'])
                 # right justify data
-                data_ax.text(0.8, 0.9, f'${pond_mtd_expense:,.2f}\n${pond_ytd_expense:,.2f}', ha='right', va='top', ma='right', fontsize=self.fontsizes['medium'])
+                data_ax.text(0.9, 0.9, f'${int(pond_mtd_expense):,}\n{f"{int(pond_mtd_harvested):,} kg" if pond_mtd_harvested >= 1 else "-  "}\n\n${int(pond_ytd_expense):,}\n{f"{int(pond_ytd_harvested):,} kg" if pond_ytd_harvested >= 1 else "-  "}', ha='right', va='top', ma='right', fontsize=self.fontsizes['small'])
                 
     def plot_aggregates(self):
-        # call sum(numeric_only=True) first to sum each numeric column, then call sum() again on the resulting series of column subtotals, to get the overall sum of expenses for entire farm
-        day_expense_total = self.day_expense_data.sum(numeric_only=True).sum()
-        ytd_expense_total = self.ytd_expense_data.sum(numeric_only=True).sum()
-        mtd_expense_total = self.mtd_expense_data.sum(numeric_only=True).sum()
-        # left justify categories
-        self.fig.text(0.06, 0.17, f'Daily Total Expenses:\nMTD Total Expenses:\nYTD Total Expenses:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['large'])
-        # right justify data
-        self.fig.text(0.25, 0.17, f'{f"${day_expense_total:,.2f}" if day_expense_total > 0 else "-"}\n${mtd_expense_total:,.2f}\n${ytd_expense_total:,.2f}', ha='left', va='top', ma='right', fontsize=self.fontsizes['large'])
-
-        # plot some temp info about expense calcs
-        self.fig.text(0.67, 0.3, 'Expense unit cost assumptions:\n------------------------------\nUAN-32: $2.08/gal\nFertilizer 10-34: $4.25/gal\nBleach: $3.15/gal\nCO2: $0.15/lb\nTrace: ***$1/gal\nIron: ***$1/gal\nCal Hypo: $0.78/kg\nBenzalkonium: ***$1/gal\n\n***not accurate pricing', ha='left', va='top', ma='left', fontsize=self.fontsizes['large'])
+        # add note next to title regarding YTD start
+        self.fig.text(0.7, 0.95, f'YTD Period Beginning: {self.ytd_start.strftime("%B %Y")}', ha='left', va='top', fontsize=self.fontsizes['default'])
         
+        # call sum(numeric_only=True) first to sum each numeric column, then call sum() again on the resulting series of column subtotals, to get the overall sum of expenses for entire farm
+        mtd_expense_total = self.mtd_expense_data.sum(numeric_only=True).sum()
+        ytd_expense_total = self.ytd_expense_data.sum(numeric_only=True).sum()
+        # left justify categories
+        self.fig.text(0.07, 0.17, f'MTD Total Expenses:\nYTD Total Expenses:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        # right justify data
+        self.fig.text(0.23, 0.17, f'${int(mtd_expense_total):,}\n${int(ytd_expense_total):,}', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+
+        # show aggregate estimated harvested totals
+        mtd_harvested_total = self.mtd_harvest_data.sum(numeric_only=True).sum()
+        ytd_harvested_total = self.ytd_harvest_data.sum(numeric_only=True).sum()
+        # left justify categories
+        self.fig.text(0.33, 0.17, f'MTD Total *Calculated Harvested:\nYTD Total *Calculated Harvested:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        # right justify data
+        self.fig.text(0.575, 0.17, f'{int(mtd_harvested_total):,} kg\n{int(ytd_harvested_total):,} kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+        # add footnote regarding calculated mass
+        self.fig.text(0.07, 0.11, "*Calculated harvest mass is based on pond depth and density measurements taken on day of harvest and the next available day", ha='left', va='top')
+        
+        # show aggregate estimated harvested totals
+        mtd_cost_per_kg = self.mtd_harvest_data.sum(numeric_only=True).sum()
+        ytd_cost_per_kg = self.ytd_harvest_data.sum(numeric_only=True).sum()
+        # left justify categories
+        self.fig.text(0.67, 0.17, f'MTD Cost Per Kilogram:\nYTD Cost Per Kilogram:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        # right justify data
+        self.fig.text(0.85, 0.17, f'${mtd_expense_total/mtd_harvested_total:,.2f}/kg\n${ytd_expense_total/ytd_harvested_total:,.2f}/kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+
+        # show ytd mass breakout by harvest and splits
+        ytd_harvest_harvested = self.ytd_harvest_data.loc[:,'est_harvested'].sum()
+        ytd_harvest_split = self.ytd_harvest_data.loc[:, 'est_split'].sum()
+        self.fig.text(0.07, 0.14, 'YTD Mass to Processing\nYTD Mass to Splits', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        self.fig.text(0.26, 0.14, f'{int(ytd_harvest_harvested):,} kg\n{int(ytd_harvest_split):,} kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+        
+        # plot some temp info about expense calcs
+        self.fig.text(0.7, 0.3, 'Expense unit costs:\n-------------------------------------------------\nUAN-32:\nFertilizer 10-34:\nBleach:\nCO2:\nTrace:\nIron:\nCal Hypo:\nBenzalkonium:', ha='left', va='top', ma='left', fontsize=self.fontsizes['default'])
+        self.fig.text(0.82, 0.3, '\n\n$2.08/gal\n$4.25/gal\n$3.15/gal\n$0.15/lb\n$0.41/gal\n$0.60/gal\n$3.17/kg\n$49.07/gal', ha='left', va='top', ma='left', fontsize=self.fontsizes['default'])
         
 class PotentialHarvestsReport(): 
     ''' 

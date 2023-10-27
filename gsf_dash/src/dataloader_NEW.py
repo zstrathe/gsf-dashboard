@@ -15,7 +15,7 @@ from .db_utils import *
 from .utils import redirect_logging_to_file
 
 class Dataloader:
-    account = MSAccount() # NEW CLASS FOR HANDLING MS 365 API INTERACTIONS / NEED TO UPDATE CODE TO USE THIS INSTEAD OF 'office365' MODULE
+    account = MSAccount() # CLASS FOR HANDLING MS 365 API INTERACTIONS 
     
     def __init__(self, select_date, db_engine_name: str = 'gsf_data', run: bool = False):
         self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
