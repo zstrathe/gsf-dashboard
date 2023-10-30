@@ -12,11 +12,9 @@ from matplotlib.patches import Ellipse, Rectangle
 from . import generate_multipage_pdf
 from .db_utils import query_data_table_by_date, query_data_table_by_date_range
 
-class BasePondsPlot(ABC):
-    def __init__(self, report_date: datetime, save_output=True, db_name: str | None = None):
-        self.fontsize_base = 5 
+class BasePondsGridReport(ABC):
+    def __init__(self, report_date: datetime, save_output: bool = True):
         self.report_date = pd.to_datetime(report_date).normalize() # Normalize report_date to remove potential time data and prevent possible key errors when selecting date range from data
-        self._report_title = ''
         self.save_output = save_output
 
     @property
@@ -29,6 +27,8 @@ class BasePondsPlot(ABC):
 
     @property
     def fontsize_base(self) -> int|float:
+        if not hasattr(self, '_FONTSIZE_BASE'):
+            self._FONTSIZE_BASE = 5
         return self._FONTSIZE_BASE
     
     @fontsize_base.setter
@@ -40,13 +40,15 @@ class BasePondsPlot(ABC):
 
     @property
     def report_title(self) -> str:
+        if not hasattr(self, '_report_title'):
+            self._report_title = ''
         return self._report_title
 
     @report_title.setter
     def report_title(self, title_str: str) -> None:
         self._report_title = title_str
 
-    def run(self) -> None:
+    def run(self) -> str|None: # returns output file path if self.save_output == True, else returns None
         '''
         Method to generate the report
         '''
@@ -102,7 +104,7 @@ class BasePondsPlot(ABC):
             self.plot_each_pond(subplot_spec, pond_id)
 
         #self.fig.text(0.125, 0.01, 'test figure text', ha='left', va='top')
-        self.plot_aggregates()
+        self.plot_annotations()
             
         #self.fig.show()
         if self.save_output:
@@ -238,10 +240,10 @@ class BasePondsPlot(ABC):
         '''   
 
     @abstractmethod
-    def plot_aggregates(self):
+    def plot_annotations(self):
         pass
    
-class TestReport(BasePondsPlot):
+class TestReport(BasePondsGridReport):
     def plot_each_pond(self, subplot_spec, pond_id, n_rows=5, n_cols=3):
         if 'BLANK' in pond_id:
             pass
@@ -257,10 +259,10 @@ class TestReport(BasePondsPlot):
             self.subplot_ax_format(data_ax, fill_color=None)
             data_ax.text(0.5, 0.5, 'test data text', ha='center', va='center')
     
-    def plot_aggregates(self):
+    def plot_annotations(self):
         pass
 
-class ExpenseReport(BasePondsPlot):
+class ExpenseGridReport(BasePondsGridReport):
     def __init__(self, report_date: datetime, **kwargs):
         # init as base class first, to set custom class parameters
         super().__init__(report_date, **kwargs) 
@@ -313,7 +315,7 @@ class ExpenseReport(BasePondsPlot):
                 # right justify data
                 data_ax.text(0.9, 0.9, f'${int(pond_mtd_expense):,}\n{f"{int(pond_mtd_harvested):,} kg" if pond_mtd_harvested >= 1 else "-  "}\n\n${int(pond_ytd_expense):,}\n{f"{int(pond_ytd_harvested):,} kg" if pond_ytd_harvested >= 1 else "-  "}', ha='right', va='top', ma='right', fontsize=self.fontsizes['small'])
                 
-    def plot_aggregates(self):
+    def plot_annotations(self):
         # add note next to title regarding YTD start
         self.fig.text(0.7, 0.95, f'YTD Period Beginning: {self.ytd_start.strftime("%B %Y")}', ha='left', va='top', fontsize=self.fontsizes['default'])
         
@@ -344,15 +346,143 @@ class ExpenseReport(BasePondsPlot):
         self.fig.text(0.85, 0.17, f'${mtd_expense_total/mtd_harvested_total:,.2f}/kg\n${ytd_expense_total/ytd_harvested_total:,.2f}/kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
 
         # show ytd mass breakout by harvest and splits
-        ytd_harvest_harvested = self.ytd_harvest_data.loc[:,'est_harvested'].sum()
-        ytd_harvest_split = self.ytd_harvest_data.loc[:, 'est_split'].sum()
-        self.fig.text(0.07, 0.14, 'YTD Mass to Processing\nYTD Mass to Splits', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
-        self.fig.text(0.26, 0.14, f'{int(ytd_harvest_harvested):,} kg\n{int(ytd_harvest_split):,} kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+        # ytd_harvest_harvested = self.ytd_harvest_data.loc[:,'est_harvested'].sum()
+        # ytd_harvest_split = self.ytd_harvest_data.loc[:, 'est_split'].sum()
+        # self.fig.text(0.07, 0.14, 'YTD Mass to Processing\nYTD Mass to Splits', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        # self.fig.text(0.26, 0.14, f'{int(ytd_harvest_harvested):,} kg\n{int(ytd_harvest_split):,} kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
         
         # plot some temp info about expense calcs
         self.fig.text(0.7, 0.3, 'Expense unit costs:\n-------------------------------------------------\nUAN-32:\nFertilizer 10-34:\nBleach:\nCO2:\nTrace:\nIron:\nCal Hypo:\nBenzalkonium:', ha='left', va='top', ma='left', fontsize=self.fontsizes['default'])
         self.fig.text(0.82, 0.3, '\n\n$2.08/gal\n$4.25/gal\n$3.15/gal\n$0.15/lb\n$0.41/gal\n$0.60/gal\n$3.17/kg\n$49.07/gal', ha='left', va='top', ma='left', fontsize=self.fontsizes['default'])
         
+class BaseTableReport(ABC):
+    def __init__(self, report_title: str, report_date: datetime, report_subtitle: str|None = None, **kwargs): 
+        self.report_title = report_title
+        self.report_subtitle = report_subtitle
+        self.report_date = report_date
+        self.data_dict_list = self.load_data()
+
+    @property
+    def inter_table_spacing(self) -> float|int:
+        if not self._inter_table_spacing:
+            self._inter_table_spacing = 0.03
+        return self._inter_table_spacing
+
+    @inter_table_spacing.setter
+    def inter_table_spacing(self, spacing_value: float|int) -> None:
+        self._inter_table_spacing = spacing_value
+    
+    @abstractmethod
+    def load_data(self) -> list[dict]:
+        ''' 
+        Load data and return a list of dicts:
+            dict keys:   "title": str
+                         "df": pd.DataFrame
+        '''
+        pass
+    
+    def run(self) -> str: # returns output file path
+        # helper function to generate a new figure (one for each "page" required)
+        def gen_fig(title_page=False):
+            ''' 
+            params: 
+                title_page: bool:
+                    - True: add title text and adjust spacing when a title is added
+                    - False: no title, start table plot from the top of figure
+            '''
+            # Initialize plot
+            plt_width = 8.5
+            plt_height = 11
+            scale_factor = 1
+            fig, ax = plt.subplots(figsize=(plt_width*scale_factor, plt_height*scale_factor))
+            ax_border_pad = 0.5 # margin padding (in inches) between ax and full fig on all sides, just to maintain a margin for printing without needing to rescale, as well as room for header/footer info to be added (page numbers, etc.)
+            ax_width = (plt_width - ax_border_pad*2) / plt_width
+            ax_height = (plt_height - ax_border_pad*2) / plt_height 
+            ax_left_x = (1 - ax_width)/2
+            ax_bottom_y = (1 - ax_height)/2
+            ax.set_position([ax_left_x, ax_bottom_y, ax_width, ax_height]) # set ax to fill entire figure (except for the border padding)
+            ax.axis('off')
+            if title_page:
+                title_text = f'{self.report_title} - {str(select_date.strftime("%-m/%-d/%y"))}' 
+                t1 = ax.text(0.5, 1, title_text, ha='center', va='top', fontsize=14, weight='bold')
+                if self.report_subtitle:
+                    t1 = ax.text(0.5,0.992, self.report_subtitle, ha='center', va='top', fontsize=8)  
+                # get the y-coordinate where tables can begin plotting on figure (after title text, or at top of ax if title text isn't present: i.e., page 2+)
+                y0 = t1.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted()).y0 - self.inter_table_spacing
+            else:
+                y0 = 1
+            return fig, ax, y0
+
+        # Helper function to plot each sub-table (provided as a pd.DataFrame) within the figure
+        # if table falls outside of the figure dimensions, then the table is removed from the current figure 
+        # and the string 'start_new_page' is returned to indicate that another figure should be generated for a new page
+        ## TODO: implement an option of splitting a table between multiple pages, rather than forcing a table to fit on single page
+        def plot_table(table_title, df, ax, y_start, data_fontsize=6.4, title_fontsize=8):
+            table_title = ax.text(0.5, y_start, table_title, ha='center', va='top', fontsize=title_fontsize, weight='bold')
+            table_title_dims = table_title.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+
+            table_y_max = table_title_dims.y0 - 0.0025 # add 0.0025 spacing (in terms of ax y-coordinate) between the title and top of table
+
+            # plot a temporary table to get its dimensions, then remove it 
+            # need to do this so that tables can be plotted on a single ax with even vertical spacing between them
+            # the important dimension to capture here is the table height (after setting fontsize) because that will be variable depending on the length of the data, 
+            # and the 'bbox' parameter for a matplotlib table (to plot in an exact specified location) requires a lower y-bound value, which isn't possible without knowing its height relative to where the table should start
+            # (it would be more efficient to simply move this table, but that doesn't seem to be possible with matplotlib, so just removing and regenerating it instead once bounding box coordinates are calculated)
+            temp_table = ax.table(cellText=df.values, colLabels=df.columns, cellLoc='center')
+            temp_table.auto_set_font_size(False)
+            temp_table.set_fontsize(data_fontsize)
+            temp_table.auto_set_column_width(col=list(range(len(df.columns))))
+            temp_table_dims = temp_table.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+            temp_table.remove()
+
+            table = ax.table(cellText=df.values, colLabels=df.columns, cellLoc='center', colColours=['whitesmoke']*len(df.columns), bbox=[temp_table_dims.x0, table_y_max - temp_table_dims.height, temp_table_dims.width, temp_table_dims.height])
+            table.auto_set_font_size(False)
+            table.set_fontsize(data_fontsize)
+            table.auto_set_column_width(col=list(range(len(df.columns))))
+            table_dims = table.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
+
+            # catch if the lower y-bound of the table is less than 0 (meaning it exceeded the ax size), if so then remove the plotted data and return signal to start a new page
+            if table_dims.y0 < 0: 
+                table_title.remove()
+                table.remove()
+                return 'start_new_page'     
+            else:
+                return table_dims.y0 # return the minimum/bottom y_coordinate value for the table
+        
+        fig_list = [] # initialize list of figs (one for each output page, as necessary)   
+        fig, ax, y_align = gen_fig(title=True)
+        table_spacing = 0.035
+        
+        for curr_table in self.data_dict_list:
+            # call plot_table function, which returns the next y_coordinate for plotting a table to
+            # once the y_coordinates for a table are outside of the ax bound (< 0) then the function will return the string 'start_new_page'
+            # in that case, append the current figure to fig_list, then generate a new figure and re-plot the table on the new page
+            y_align = plot_table(table_title=curr_table.get('title'), df=curr_table.get('df'), ax=ax, y_start=y_align)
+            if y_align == 'start_new_page':
+                fig_list.append(fig)
+                fig, ax, y_align = gen_fig()
+                y_align = plot_table(table_title=curr_table.get('title'), df=curr_table.get('df'), ax=ax, y_start=y_align)
+            y_align -= self.inter_table_spacing
+        fig_list.append(fig) # append the last/most-recent figure to the fig list before generating output file    
+
+        filename = f'./output_files/{self.report_title} {self.report_date.strftime("%Y-%m-%d")}.pdf'
+        out_filename = generate_multipage_pdf(fig_list, filename, add_pagenum=True, bbox_inches=None)
+        return out_filename
+
+class NewPotentialHarvestsReport(BaseTableReport):
+    def load_data(self):
+        pass
+        ''' 
+        load: by pond:
+            - drop to (depth in inches) [CALCULATE]
+            - days since harvested [CALCULATE]
+            - harvestable depth [QUERY]
+            - harvestable gallons [QUERY]
+            - harvestable mass [QUERY]
+            - running total gallons [QUERY]
+            - running total mass [QUERY]
+        '''
+
 class PotentialHarvestsReport(): 
     ''' 
     JUST A PLACEHOLDER CLASS FOR THIS CODE FOR NOW

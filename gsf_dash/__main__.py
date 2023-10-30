@@ -73,8 +73,8 @@ def main(argv):
 
     # TEMPORARY INTEGRATION OF NEW PLOT OF EXPENSES USING MORE MODULAR CLASS METHODS
     try:
-        from src.generate_overview_abstractclasses import ExpenseReport
-        output_filenames.insert(1, ExpenseReport(report_date=date_dt).run())
+        from src.generate_overview_abstractclasses import ExpenseGridReport
+        output_filenames.insert(1, ExpenseGridReport(report_date=date_dt).run())
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error running expense report!', tb)
