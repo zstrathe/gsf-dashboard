@@ -12,19 +12,7 @@ from matplotlib.patches import Ellipse, Rectangle
 from . import generate_multipage_pdf
 from .db_utils import query_data_table_by_date, query_data_table_by_date_range
 
-class BasePondsGridReport(ABC):
-    def __init__(self, report_date: datetime, save_output: bool = True):
-        self.report_date = pd.to_datetime(report_date).normalize() # Normalize report_date to remove potential time data and prevent possible key errors when selecting date range from data
-        self.save_output = save_output
-
-    @property
-    def fontsizes(self) -> dict:
-        return {'default': self._FONTSIZE_BASE,
-                'small': self._FONTSIZE_BASE * 0.75,
-                'medium': self._FONTSIZE_BASE * 1.25,
-                'large': self._FONTSIZE_BASE * 1.75,
-                'title': self._FONTSIZE_BASE * 1.75 } 
-
+class BaseReportProperties:
     @property
     def fontsize_base(self) -> int|float:
         if not hasattr(self, '_FONTSIZE_BASE'):
@@ -39,6 +27,14 @@ class BasePondsGridReport(ABC):
         print('Fontsize updated to:', base_font_size)
 
     @property
+    def fontsizes(self) -> dict:
+        return {'default': self.fontsize_base,
+                'small': self.fontsize_base * 0.75,
+                'medium': self.fontsize_base * 1.25,
+                'large': self.fontsize_base * 1.75,
+                'title': self.fontsize_base * 1.75 } 
+
+    @property
     def report_title(self) -> str:
         if not hasattr(self, '_report_title'):
             self._report_title = ''
@@ -48,10 +44,33 @@ class BasePondsGridReport(ABC):
     def report_title(self, title_str: str) -> None:
         self._report_title = title_str
 
+    @property
+    def report_date(self) -> datetime:
+        if not hasattr(self,'_report_date'):
+            raise Exception(f'ERROR! Could not create instance of {self.__name__} because no "report_date" was provided!')
+        return self._report_date
+
+    @report_date.setter
+    def report_date(self, report_date_: datetime) -> None:
+        if not isinstance(report_date_, datetime):
+            raise Exception(f'ERROR! Could not create instance of {self.__name__} because an invalid report_date was provided! It should be a datetime.datetime value!')
+        # Normalize report_date to remove potential time data and prevent possible key errors when selecting date range from data
+        self._report_date = pd.to_datetime(report_date_).normalize() 
+        self._report_date.as_str_filename = self._report_date.strftime("%Y-%m-%d")
+        self._report_date.as_str_print = self._report_date.strftime("%-m/%-d/%Y")
+        
+class BasePondsGridReport(ABC, BaseReportProperties):
+    def __init__(self, report_date: datetime, save_output: bool = True):
+        self.report_date = report_date
+        self.save_output = save_output
+
     def run(self) -> str|None: # returns output file path if self.save_output == True, else returns None
         '''
         Method to generate the report
         '''
+        # load data (abstract method, implement for each inherited class instance)
+        self.load_data()
+        
         N_ROWS_SMALL = 12
         N_ROWS_LARGE = 10
         N_COLS_SMALL = 4
@@ -77,9 +96,6 @@ class BasePondsGridReport(ABC):
             else: 
                 # append blanks for the two large columns with only 10 rows 
                 [row.append(f'BLANK {idx_row+1}-{c}') for c in [6,8]]
-    
-        # Add empty rows for aggregations, notes, etc     
-        #[title_labels.append([f'BLANK {r}-{c}' for c in range(1,7)]) for r in range(13,15)]
         
         # flatten title_labels for indexing from gridspec plot generation
         title_labels = [label for item in title_labels for label in item]
@@ -95,8 +111,7 @@ class BasePondsGridReport(ABC):
         # leave room on top margin for title, leave room on bottom margin for additional notes, aggregations, etc.
         plot_grid = gridspec.GridSpec(nrows=max(N_ROWS_SMALL, N_ROWS_LARGE)+N_EMPTY_ROWS_BOTTOM, ncols=N_COLS_SMALL+N_COLS_LARGE, figure=self.fig, left=0.06, right=0.94, top=0.93, bottom=0.2, wspace=0.05, hspace=0.1)
 
-        title_date = self.report_date.strftime('%-m/%-d/%Y')
-        self.fig.suptitle(f'{self.report_title}\n{title_date}', fontweight='bold', fontsize=self.fontsizes['title'], y=0.97)
+        self.fig.suptitle(f'{self.report_title}\n{self.report_date.as_str_print}', fontweight='bold', fontsize=self.fontsizes['title'], y=0.97)
         
         # iterate through each subplot in the grid
         for idx, subplot_spec in enumerate(plot_grid):
@@ -108,7 +123,7 @@ class BasePondsGridReport(ABC):
             
         #self.fig.show()
         if self.save_output:
-            out_path = Path(f'output_files/{self.report_title} {self.report_date.strftime("%Y-%m-%d")}.pdf')
+            out_path = Path(f'output_files/{self.report_title} {self.report_date.as_str_filename}.pdf')
             self.fig.savefig(out_path.as_posix())#, bbox_inches='tight' # reduce DPI by scale factor... should result in output file actual size being accurate to A4 sheet size?
             return out_path.as_posix()
         else:
@@ -209,9 +224,6 @@ class BasePondsGridReport(ABC):
             if row_fill_color != 'white':
                 data_rows_y_bounds.append((row_y_bound,row_fill_color))
 
-        #print('rows x-bound:', data_rows_x_bound)    
-        #print('row y-bounds:', data_rows_y_bounds)
-        
         # plot colored rectangle for corresponding row
         row_box_padding = 0.01
         for row_y in data_rows_y_bounds:
@@ -223,6 +235,13 @@ class BasePondsGridReport(ABC):
         box_width = max_coords[1]-max_coords[0]
         ax.add_patch(Rectangle((max_coords[0]-box_padding,max_coords[1]-box_padding),max_coords[2]-max_coords[0]+box_padding*2,max_coords[3]-max_coords[1]+box_padding*2,linewidth=1,edgecolor='black',facecolor='none',clip_on=False))
         
+    @abstractmethod
+    def load_data(self):
+        pass
+        '''
+        Load data needed for report as a class attribute
+        '''
+    
     @abstractmethod
     def plot_each_pond(self, subplot_spec: gridspec.SubplotSpec, pond_id: str, n_rows: int, n_cols: int):
         pass
@@ -241,9 +260,15 @@ class BasePondsGridReport(ABC):
 
     @abstractmethod
     def plot_annotations(self):
+        '''
+        Add annotations with additional data, legend, etc.
+        '''
         pass
    
 class TestReport(BasePondsGridReport):
+    def load_data(self):
+        pass
+    
     def plot_each_pond(self, subplot_spec, pond_id, n_rows=5, n_cols=3):
         if 'BLANK' in pond_id:
             pass
@@ -264,24 +289,25 @@ class TestReport(BasePondsGridReport):
 
 class ExpenseGridReport(BasePondsGridReport):
     def __init__(self, report_date: datetime, **kwargs):
-        # init as base class first, to set custom class parameters
+        # init as base report class first! prior to setting custom class properties
         super().__init__(report_date, **kwargs) 
 
-        # set custom report class parameters
+        # set report properties
         self.report_title = 'Expenses by Pond'
         self.fontsize_base = 12 # sets/overrides base fontsize
-        
+
+    def load_data(self) -> None:
         # get start dates for both MTD and YTD expenses
         ytd_month_start = 9
-        if report_date.month < ytd_month_start:
+        if self.report_date.month < ytd_month_start:
             self.ytd_start = datetime(self.report_date.year - 1, ytd_month_start, 1)
         else:
             self.ytd_start = datetime(self.report_date.year, ytd_month_start, 1)
         self.mtd_start = datetime(self.report_date.year, self.report_date.month, 1)
         
         # Query ytd expense & estimated harvested data from DB, returns a pandas dataframe of data for each day and each pond
-        self.ytd_expense_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_expenses', query_date_start=self.ytd_start, query_date_end=report_date)
-        self.ytd_harvest_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_calculated', query_date_start=self.ytd_start, query_date_end=report_date, col_names=['est_harvested', 'est_split'])
+        self.ytd_expense_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_expenses', query_date_start=self.ytd_start, query_date_end=self.report_date)
+        self.ytd_harvest_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_calculated', query_date_start=self.ytd_start, query_date_end=self.report_date, col_names=['est_harvested', 'est_split'])
         
         # get mtd expense & harvested data by filtering ytd_expense data
         self.mtd_expense_data = self.ytd_expense_data[self.ytd_expense_data['Date'] >= self.mtd_start.strftime('%Y-%m-%d')]
@@ -341,9 +367,9 @@ class ExpenseGridReport(BasePondsGridReport):
         mtd_cost_per_kg = self.mtd_harvest_data.sum(numeric_only=True).sum()
         ytd_cost_per_kg = self.ytd_harvest_data.sum(numeric_only=True).sum()
         # left justify categories
-        self.fig.text(0.67, 0.17, f'MTD Cost Per Kilogram:\nYTD Cost Per Kilogram:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        self.fig.text(0.67, 0.17, f'MTD Avg $/kg:\nYTD Avg $/kg:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
         # right justify data
-        self.fig.text(0.85, 0.17, f'${mtd_expense_total/mtd_harvested_total:,.2f}/kg\n${ytd_expense_total/ytd_harvested_total:,.2f}/kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+        self.fig.text(0.85, 0.17, f'${mtd_expense_total/mtd_harvested_total:,.2f}\n${ytd_expense_total/ytd_harvested_total:,.2f}', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
 
         # show ytd mass breakout by harvest and splits
         # ytd_harvest_harvested = self.ytd_harvest_data.loc[:,'est_harvested'].sum()
@@ -355,13 +381,11 @@ class ExpenseGridReport(BasePondsGridReport):
         self.fig.text(0.7, 0.3, 'Expense unit costs:\n-------------------------------------------------\nUAN-32:\nFertilizer 10-34:\nBleach:\nCO2:\nTrace:\nIron:\nCal Hypo:\nBenzalkonium:', ha='left', va='top', ma='left', fontsize=self.fontsizes['default'])
         self.fig.text(0.82, 0.3, '\n\n$2.08/gal\n$4.25/gal\n$3.15/gal\n$0.15/lb\n$0.41/gal\n$0.60/gal\n$3.17/kg\n$49.07/gal', ha='left', va='top', ma='left', fontsize=self.fontsizes['default'])
         
-class BaseTableReport(ABC):
-    def __init__(self, report_title: str, report_date: datetime, report_subtitle: str|None = None, **kwargs): 
-        self.report_title = report_title
-        self.report_subtitle = report_subtitle
+class BaseTableReport(ABC, BaseReportProperties):
+    def __init__(self, report_date: datetime, report_subtitle: str|None = None, **kwargs): 
         self.report_date = report_date
-        self.data_dict_list = self.load_data()
-
+        self.report_subtitle = report_subtitle # OPTIONAL formatted string for adding subtitle/additional information below the report title
+        
     @property
     def inter_table_spacing(self) -> float|int:
         if not self._inter_table_spacing:
@@ -403,7 +427,7 @@ class BaseTableReport(ABC):
             ax.set_position([ax_left_x, ax_bottom_y, ax_width, ax_height]) # set ax to fill entire figure (except for the border padding)
             ax.axis('off')
             if title_page:
-                title_text = f'{self.report_title} - {str(select_date.strftime("%-m/%-d/%y"))}' 
+                title_text = f'{self.report_title} - {self.report_date.as_str_print}' 
                 t1 = ax.text(0.5, 1, title_text, ha='center', va='top', fontsize=14, weight='bold')
                 if self.report_subtitle:
                     t1 = ax.text(0.5,0.992, self.report_subtitle, ha='center', va='top', fontsize=8)  
@@ -449,6 +473,10 @@ class BaseTableReport(ABC):
             else:
                 return table_dims.y0 # return the minimum/bottom y_coordinate value for the table
         
+        # load data
+        # returns a list of dictionaries with {"title": str, "df", pd.DataFrame} for each list item
+        self.data_dict_list = self.load_data()
+        
         fig_list = [] # initialize list of figs (one for each output page, as necessary)   
         fig, ax, y_align = gen_fig(title=True)
         table_spacing = 0.035
@@ -465,11 +493,19 @@ class BaseTableReport(ABC):
             y_align -= self.inter_table_spacing
         fig_list.append(fig) # append the last/most-recent figure to the fig list before generating output file    
 
-        filename = f'./output_files/{self.report_title} {self.report_date.strftime("%Y-%m-%d")}.pdf'
+        filename = f'./output_files/{self.report_title} {self.report_date.as_str_filename}.pdf'
         out_filename = generate_multipage_pdf(fig_list, filename, add_pagenum=True, bbox_inches=None)
         return out_filename
 
 class NewPotentialHarvestsReport(BaseTableReport):
+    def __init__(self, report_date: datetime, **kwargs):
+        # init as base report class first! prior to setting custom class properties
+        super().__init__(report_date, **kwargs) 
+
+        # set report properties
+        self.report_title = 'Expenses by Pond'
+        self.fontsize_base = 12 # sets/overrides base fontsize
+
     def load_data(self):
         pass
         ''' 
