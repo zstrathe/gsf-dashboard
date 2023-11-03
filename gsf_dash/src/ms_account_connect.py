@@ -117,11 +117,12 @@ class MSAccount(object):
             except:
                 print('Error loading specified sharepoint site. Try again: ')
         print(f'\n{"=*"*16} ITEMS {"*="*16}')
-        for item in library.get_child_folders():
+        for item in library.get_items():
             print(f'{item} | ID: {item.object_id}')
         stop_flag = False
         while stop_flag == False:
-            user_choice = input('\nEnter folder (using ID) to list files: ')
+            if (user_choice := input('\nEnter folder (using ID) to list files, or "q" to quit: ')).lower() == 'q':
+                return None
             try:
                 folder = library.get_item(user_choice)
                 if folder.is_folder:
@@ -154,9 +155,9 @@ class MSAccount(object):
                                              msg_body=error_msg) 
         return None
     
-    def download_sharepoint_file_by_id(self, object_id: str, to_path: Path) -> Path|None:
+    def download_sharepoint_file_by_id(self, object_id: str, to_path: Path, **kwargs) -> Path|None:
         file_obj = self.get_sharepoint_file_by_id(object_id)
-        dl_success = file_obj.download(to_path=to_path) # returns True if success, False if failure
+        dl_success = file_obj.download(to_path=to_path, **kwargs) # returns True if success, False if failure
         if dl_success:
             file_path = to_path / file_obj.name
             if os.path.isfile(file_path):

@@ -510,8 +510,8 @@ class NewPotentialHarvestsReport(BaseTableReport):
         pass
         ''' 
         load: by pond:
-            - drop to (depth in inches) [CALCULATE]
-            - days since harvested [CALCULATE]
+            - drop to (depth in inches) [CALCULATE current depth - harvestable depth add to calcs db]
+            - days since harvested [CALCULATE add to calcs db]
             - harvestable depth [QUERY]
             - harvestable gallons [QUERY]
             - harvestable mass [QUERY]

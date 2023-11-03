@@ -56,6 +56,13 @@ def delete_existing_rows_ponds_data(db_engine: sqlalchemy.Engine, table_name: st
             conn.execute(table.delete().where(sqlalchemy.and_(table.c.Date == row['Date'], table.c.PondID == row['PondID'])))
     print('Deleted duplicate rows!')
 
+def update_table_rows_from_df(db_engine: sqlalchemy.Engine, table_name: str, update_data_df: pd.DataFrame) -> None:
+    print('Deleting existing rows from table...')
+    delete_existing_rows_ponds_data(db_engine=db_engine, table_name=table_name, update_data_df=update_data_df)
+    #Use DataFrame.to_sql() to insert data into database table
+    update_data_df.to_sql(name=table_name, con=db_engine, if_exists='append', index=False)
+    print('Updated DB!')
+
 def load_table(db_engine: sqlalchemy.Engine, table_name: str) -> sqlalchemy.Table:
     metadata = sqlalchemy.MetaData()
     return sqlalchemy.Table(table_name, metadata, autoload_with=db_engine)

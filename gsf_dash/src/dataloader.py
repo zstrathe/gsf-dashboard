@@ -22,9 +22,12 @@ class Dataloader:
         if run:
             scorecard_datafile = self.download_data('scorecard_data_info')
             scorecard_dataframe = self.load_scorecard_data(scorecard_datafile)
+            
             epa_datafile1 = self.download_data('epa_data_info1')
             epa_datafile2 = self.download_data('epa_data_info2')
             epa_data_dict = self.load_epa_data([epa_datafile1, epa_datafile2])
+            self.sc_df = scorecard_dataframe # TEMP FOR 
+            self.epa_dict = epa_data_dict
             active_dict = self.generate_active_dict(scorecard_dataframe, num_days_prior=5)
             processing_datafile = self.download_data('processing_data_info')
             processing_dataframe = self.load_processing_data(processing_datafile)
