@@ -1,6 +1,7 @@
 import os
 import sqlalchemy
 import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype
 from dateutil.rrule import rrule, DAILY 
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -57,6 +58,12 @@ def delete_existing_rows_ponds_data(db_engine: sqlalchemy.Engine, table_name: st
     print('Deleted duplicate rows!')
 
 def update_table_rows_from_df(db_engine: sqlalchemy.Engine, table_name: str, update_data_df: pd.DataFrame) -> None:
+    # update "Date" column in update_data_df to string representation (if it isn't already)
+    if "Date" in update_data_df.columns:
+        date_dtype = update_data_df.dtypes["Date"]
+        if is_datetime64_any_dtype(date_dtype):
+            update_data_df.loc[:,'Date'] = update_data_df.loc[:,'Date'].apply(lambda x: x.strftime('%Y-%m-%d'))
+    
     print('Deleting existing rows from table...')
     delete_existing_rows_ponds_data(db_engine=db_engine, table_name=table_name, update_data_df=update_data_df)
     #Use DataFrame.to_sql() to insert data into database table

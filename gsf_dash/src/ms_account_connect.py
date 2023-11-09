@@ -18,7 +18,7 @@ class MSAccount(object):
         self.account_connection = self.load_account_user(auth_manual)
         # generate a dict of sharepoint site library IDs for each sharepoint site listed in settings config
         self.site_libs = {site_name: self.account_connection.sharepoint().get_site(site_id).get_default_document_library() for (site_name, site_id) in self.sharepoint_site_ids.items()}
-    
+        
     def load_account_user(self, auth_manual):
         '''
         Authentication with M365 through a user account
@@ -159,11 +159,18 @@ class MSAccount(object):
         file_obj = self.get_sharepoint_file_by_id(object_id)
         dl_success = file_obj.download(to_path=to_path, **kwargs) # returns True if success, False if failure
         if dl_success:
-            file_path = to_path / file_obj.name
+            # if 'name' argument was passed to file_obj.download(), then the file will have that name
+            # otherwise, use the file's actual name from the download source
+            if not (file_name := kwargs.get('name')):
+                file_name = file_obj.name
+            file_path = to_path / file_name
+
+            # check that the downloaded file is a valid file 
+            # for very very low chance of file being corrupted, etc
             if os.path.isfile(file_path):
                 return file_path
-            else:
-                file_path.unlink() # delete whatever exists if it isn't a valid file
+            else: 
+                file_path.unlink() # delete bad file
                 return None
         else:
             return None

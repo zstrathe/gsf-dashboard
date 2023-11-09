@@ -995,8 +995,8 @@ class PondsOverviewPlots:
                     # set lastest_epa_data as the first value in single_pond_data (which should be reverse sorted)
                     latest_epa_data = single_pond_data[0][1] 
                     fill_color_dict = {(0,1.99999999):'red', 
-                                       (2.0,3.49999999): 'yellow',
-                                       (3.5,99999999999): 'mediumspringgreen'}
+                                       (2.0,2.99999999): 'yellow',
+                                       (3.0,99999999999): 'mediumspringgreen'}
                     for idx, (key, val) in enumerate(fill_color_dict.items()):
                         if latest_epa_data >= key[0] and latest_epa_data < key[1]:
                             fill_color = val 
@@ -1155,8 +1155,8 @@ class PondsOverviewPlots:
                     legend_data = [{'labels':{'Color key (latest measurement)': {'align': '1', 'weight': 'bold'}}},
                                    {'labels':{'EPA %': {'align': '1', 'weight': 'underline'}}},
                                    {'labels':{'0% - 1.99%'.center(50): {'align': '1'}}, 'fill_color': 'red'}, # use .center() to pad spacing for one row to make legend plot wider
-                                   {'labels':{'2% - 3.49%': {'align': '1'}}, 'fill_color': 'yellow'},
-                                   {'labels':{'3.5% and up': {'align': '1'}}, 'fill_color': 'mediumspringgreen'},
+                                   {'labels':{'2% - 2.99%': {'align': '1'}}, 'fill_color': 'yellow'},
+                                   {'labels':{'3% and up': {'align': '1'}}, 'fill_color': 'mediumspringgreen'},
                                    {'labels':{'No EPA data': {'align': '1'}}, 'fill_color': 'lightgrey'}
                                   ]
                     x_align = {'1': [1, 'center']}
