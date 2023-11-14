@@ -10,4 +10,3 @@ venv/
 dev_notebooks/
 .ipynb_checkpoints/
 *.backup*
-gsf_dash/src/file_data_extraction.py
