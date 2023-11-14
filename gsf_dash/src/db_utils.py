@@ -47,29 +47,66 @@ def get_primary_keys(db_table: sqlalchemy.Table) -> list:
     # Inspector.primary_key -> Column objects that are primary keys for table -> column.name
     return [k.name for k in inspector.primary_key]
 
-def delete_existing_rows_ponds_data(db_engine: sqlalchemy.Engine, table_name: str, update_data_df: pd.DataFrame) -> None:
-    if not check_if_table_exists(db_engine, table_name):
-        return # return early if the table doesn't exists / do nothing
-    table = sqlalchemy.Table(table_name, sqlalchemy.MetaData(), autoload_with=db_engine)
-    data_rows = update_data_df.to_dict(orient='records')
-    with db_engine.begin() as conn:
-        for row in data_rows:
-            conn.execute(table.delete().where(sqlalchemy.and_(table.c.Date == row['Date'], table.c.PondID == row['PondID'])))
-    print('Deleted duplicate rows!')
+def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, update_data_df: pd.DataFrame, pk_cols: list = ['Date', 'PondID']) -> bool:
+    '''
+    Function to update database table rows from a source pandas DataFrame
 
-def update_table_rows_from_df(db_engine: sqlalchemy.Engine, table_name: str, update_data_df: pd.DataFrame) -> None:
-    # update "Date" column in update_data_df to string representation (if it isn't already)
-    if "Date" in update_data_df.columns:
-        date_dtype = update_data_df.dtypes["Date"]
-        if is_datetime64_any_dtype(date_dtype):
-            update_data_df.loc[:,'Date'] = update_data_df.loc[:,'Date'].apply(lambda x: x.strftime('%Y-%m-%d'))
+    params: 
+        - db_engine: sqlalchemy.Engine
+        - db_table_name: string of the table name in the database to update rows in
+        - update_data_df: dataframe of the data to be used for updating
+        - pk_cols: list of columns to use as primary keys (defaults to ["Date", "PondID"])
+    NOTE: 
+        - pk_cols (primary key column names) must be in the update_data_df, as well as already existing in the database table
+        - update_data_df columns must be already existing in the database table
+        - if table update is unsuccessful, the database transaction will be rolled back!
+
+    returns: bool (True on success, False on failure)
+    '''
+    if len(update_data_df) == 0:
+        print('No data, skipping DB update...')
+        return False
     
-    print('Deleting existing rows from table...')
-    delete_existing_rows_ponds_data(db_engine=db_engine, table_name=table_name, update_data_df=update_data_df)
-    #Use DataFrame.to_sql() to insert data into database table
-    update_data_df.to_sql(name=table_name, con=db_engine, if_exists='append', index=False)
-    print('Updated DB!')
+    # convert Date column in update dataframe to string (because using 
+    update_data_df = convert_df_Date_col(update_data_df, option='TO_STR')
 
+    # create temp table in database to update the target table from
+    update_data_df.to_sql(name='temp_table', con=db_engine, if_exists='replace', index=False)
+    
+    # construct a statement to first insert primary key pairs into the table if they don't already exist (ignore if they do exist using INSERT OR IGNORE for sqlite)
+    pk_vals = ", ".join([str(tuple(sublist)) for sublist in update_data_df[pk_cols].values.tolist()])
+    sql_insert_keys_stmt = f'INSERT OR IGNORE INTO {db_table_name} ({", ".join(pk_cols)}) VALUES {pk_vals};'
+    sql_insert_keys_stmt = sqlalchemy.text(sql_insert_keys_stmt)
+    
+    # check that all columns being updated, as well as the primary key column arguments, are present in the database table. raise an exception if not
+    db_table_col_names = get_db_table_columns(db_engine, db_table_name)
+    if not all([col in db_table_col_names for col in list(update_data_df.columns)+pk_cols]): # add pk_cols to check list just in case columns were provided that do not exist in db table
+        raise Exception(f'ERROR: columns to update are not present in table: {db_table_name}!')
+    
+    # construct sql UPDATE FROM string
+    # This works with Sqlite, but may need replaced if migrating to another database type
+    update_col_names = [f'"{col_name}"' for col_name in update_data_df.columns if col_name not in pk_cols] # put quotes around column names so sql queries dont break for columns that include spaces in the name
+    sql_update_stmt = (f'UPDATE {db_table_name} '
+                + f'SET ({", ".join([col_name for col_name in update_col_names])}) = ({", ".join([f"temp_table.{col_name}" for col_name in update_col_names])}) ' 
+                + 'FROM temp_table '
+                + f'WHERE {" AND ".join([f"temp_table.{key_col} = {db_table_name}.{key_col}" for key_col in pk_cols])};')
+    sql_update_stmt = sqlalchemy.text(sql_update_stmt)
+    
+    # execute sql statement
+    # if resulting number of modified rows does not equal the length of the update_df, then rollback transaction 
+    with db_engine.begin() as conn:
+        insert_rows_result = conn.execute(sql_insert_keys_stmt)
+        print('New rows inserted:', insert_rows_result.rowcount)
+        
+        update_result = conn.execute(sql_update_stmt)
+        if update_result.rowcount == len(update_data_df):
+            print('Rows successfully updated:', update_result.rowcount)
+            return True
+        else:
+            print(f'Error updating table rows, number of row updates ({update_result.rowcount}) does not match source dataframe length ({len(update_data_df)})! Rolling back db transaction...')
+            conn.rollback()
+            return False
+ 
 def load_table(db_engine: sqlalchemy.Engine, table_name: str) -> sqlalchemy.Table:
     metadata = sqlalchemy.MetaData()
     return sqlalchemy.Table(table_name, metadata, autoload_with=db_engine)
@@ -106,7 +143,9 @@ def query_data_table_by_date(db_name_or_engine: str|sqlalchemy.Engine, table_nam
                 output = conn.execute(sqlalchemy.select(*[table_obj.c[col] for col in col_names]).where(table_obj.c["Date"] == query_date)).fetchall()
             else:
                 output = conn.execute(sqlalchemy.select(table_obj).where(table_obj.c["Date"] == query_date)).fetchall()
-            return pd.DataFrame(output, columns=col_names)
+        out_df = pd.DataFrame(output, columns=col_names)
+        out_df = convert_df_Date_col(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
+        return out_df
 
 def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None) -> pd.DataFrame:
     '''
@@ -150,20 +189,39 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
                 output = conn.execute(sqlalchemy.select(table_obj).where((table_obj.c["Date"] >= query_date_start) & (table_obj.c["Date"] <= query_date_end))).fetchall()
             if len(output) == 0:
                 raise Exception(f'ERROR: could not query data from db for db_name: {db_name_or_engine}, table_name: {table_name}, query_date_start: {query_date_start}, query_date_end: {query_date_end}, col_names: {col_names}')
-            return pd.DataFrame(output, columns=col_names)
+        out_df = pd.DataFrame(output, columns=col_names)
+        out_df = convert_df_Date_col(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
+        return out_df
 
-##### unused
-# def query_data_table_by_pond_and_date(db_name: str, table_name: str, pond_id: str, date: datetime, col_names: list|None = None) -> list:
-#     db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name}.db", echo=False)
-#     query_date = date.strftime("%Y-%m-%d")
-#     if not check_if_table_exists(db_engine, table_name):
-#         print(f'ERROR: Could not load {table_name} from database: {db_name}!')
-#     else:
-#         table_obj = load_table(db_engine, table_name)
-#         with db_engine.begin() as conn:
-#             output = conn.execute(sqlalchemy.select(*[table_obj.c[col] for col in col_names]).where((table_obj.c["PondID"] == pond_id) & (table_obj.c["Date"] == query_date))).fetchall()
-#             print(output)
+def convert_df_Date_col(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.DataFrame:
+    '''
+    Helper function to convert the Date column in a pandas dataframe
 
+    param:
+    -option:
+        - 'TO_STR': convert datetime column into string representation (for storing into db)
+        - 'TO_DT': convert column into datetime representation (for data manipulation outside of db)
+
+    It would be easier to just use a db that can handle datetime values...
+    '''
+    # update "Date" column in df
+    if "Date" in df.columns:
+        date_dtype_is_datetime = is_datetime64_any_dtype(df.dtypes["Date"])
+        
+        if option == 'TO_STR':
+            if date_dtype_is_datetime:
+                df['Date'] = df['Date'].apply(lambda x: x.strftime(dt_format))
+            else:
+                print('Date value is already a string, doing nothing...')
+        elif option == 'TO_DT':
+            if date_dtype_is_datetime:
+                print('Date value is already datetime, doing nothing...')
+            else:
+                df['Date'] = df['Date'].apply(lambda x: datetime.strptime(x, dt_format))
+    else:
+        print('Could not convert Date column, did not find in DF provided!')
+    return df
+        
 
 def check_active_query(db_engine: sqlalchemy.Engine, pond_id: str, check_date: str, num_prior_days_to_check: int = 5) -> None:
     check_date = datetime.strptime(check_date, '%Y-%m-%d')
