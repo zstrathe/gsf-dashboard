@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import os
 import re
+import functools
 from pathlib import Path
 from typing import Type
 from datetime import datetime
@@ -187,7 +188,7 @@ class MSAccount(object):
         print('Email successfully sent!')
         
 class M365ExcelFileHandler:
-    def __init__(self, file_object_id: str, include_sheets: list = [], ignore_sheets: list = [], load_data: bool = False, data_get_method: str = "DL", load_sheet_kwargs: dict = {}):
+    def __init__(self, file_object_id: str, include_sheets: list = [], ignore_sheets: list = [], load_data: bool = False, data_get_method: str = "DL", concat_sheets: bool = False, load_sheet_kwargs: dict = {}):
         '''
         - Extracts data from excel workbooks with M365 API and loads into pandas dataframes 
         - Dataframes are stored in self.data, with keys set as sheet names 
@@ -196,14 +197,17 @@ class M365ExcelFileHandler:
         params:
             - file_object_id: 
                     - object_id from sharepoint item (find using MSAccount.interactive_view_sharepoint_data())
-            - data_handling_method: (for collecting information and raw data from file)
-                    - 'api' (any case): data is only accessed through the MS Graph API, no data files are locally downloaded. This tends to be slower than just downloading the files and gathering data from there
-                    - 'dl': download data locally for processing file (but actual manipulation/updating of file on O365 will be through API calls, rather than just re-uploading the file) [NEED TO TEST SPEED OF RE-UPLOAD VS API CALLS FOR SIGNIFICANT CHANGES]
             - include_sheets: 
                     - list of sheets to load (skips sheets that are present in workbook but not specified)
             - ignore_sheets:
                     - list of sheets to ignore, loads every other sheet present in the workbook
                     - OPTIONAL: include "SUBSTRING[string]" to filter out sheet names that contain a substring
+            - load_data: 
+                    - True: load the sheet data into 
+            - data_get_method: (for collecting information and raw data from file)
+                    - 'API' (any case): data is only accessed through the MS Graph API, no data files are locally downloaded. This tends to be slower than just downloading the files and gathering data from there
+                    - 'DL': download data locally for processing file (but actual manipulation/updating of file on O365 will be through API calls??)
+            
             - load_last_n_rows: bool: load the most recent "n" rows from the file if an int is specified; otherwise, loads all rows
             ** include_sheets and ignore_sheets parameters are mutually exclusive (i.e., one must be empty if the other is populated)
             ** if neither include_sheets or ignore_sheets parameters are populated, then default will load all sheets
@@ -212,11 +216,11 @@ class M365ExcelFileHandler:
         print(f'loading data = {load_data}', end='...', flush=True)
         self._account = MSAccount() # get account connection 
         self._file_id = file_object_id
-        self._wb = self._account.get_sharepoint_file_by_id(file_object_id)
-        if self._wb == None: # will be None if error fetching file
+        self._file_obj = self._account.get_sharepoint_file_by_id(file_object_id)
+        if self._file_obj == None: # will be None if error fetching file
             raise Exception(f'Could not load workbook for object_id: {file_object_id}')
         else:
-            self._wb = WorkBook(self._wb) # get file as WorkBook obj from O365 module, for using API calls specific to excel files
+            self._wb = WorkBook(self._file_obj) # get file as WorkBook obj from O365 module, for using API calls specific to excel files
 
         # Get the valid worksheet names from file
         self._worksheet_names_valid = [str(s).replace('Worksheet: ', '') for idx, s in enumerate(self._wb.get_worksheets())]
@@ -253,36 +257,35 @@ class M365ExcelFileHandler:
 
         # download data file if data_get_method = "DL"
         # download at this step versus when parsing data for each sheet
-        if load_data == True and data_get_method == 'DL':
+        if load_data and data_get_method == 'DL':
             dl_file_path = self._account.download_sharepoint_file_by_id(self._file_id, to_path=Path(f'data_sources/tmp/'))
             if dl_file_path: # will be None if error downloading
-                self._downloaded_excel_file = pd.ExcelFile(dl_file_path.as_posix())
+                self._downloaded_ExcelFile = pd.ExcelFile(dl_file_path.as_posix())
                 dl_file_path.unlink() # delete file after it's loaded
             else:
                 raise Exception(f'Download error for file_id: {self._file_id}!')
 
         # collect data for sheets
-        self.sheet_data = {sname: self.get_sheet_data(sname, **load_sheet_kwargs) for sname in self._worksheet_names_load}
+        self.sheets_data = {sname: self.get_sheet_data(sname, load_data, data_get_method, **load_sheet_kwargs) for sname in self._worksheet_names_load}
+
+        # concatenate sheets into a single dataframe if concat_sheets == True and load_data == True
+        if load_data and concat_sheets:
+            self.concat_df = functools.reduce(lambda df1, df2: pd.concat([df1, df2], ignore_index=True), [sheet.df for sheet in self.sheets_data.values()])
+        else:
+            self.concat_df = None
+
+        # Close the workbook session with the MS Graph API (creating a session defaults to persistant session with the python O365 module)
+        self._wb.session.close_session()
         
-        # if dl == False:
-        #     self.sheet_data = {sname: self._get_sheet_data_api(sname, get_df=load_data) for sname in self._worksheet_names_load}
-        # else:
-        #     self.sheet_data = {sname: self._get_sheet_data_dl(sname) for sname in self._worksheet_names_load}
-                               
         print('File loaded!')
 
-    def close_wb_session(self):
-        '''
-        Close the workbook session with the MS Graph API (creating a session defaults to persistant session with the python O365 module)
-        '''
-        self._wb.session.close_session()
-    
-    def get_sheet_data(self, sheet_name: str, data_get_method: str = "DL", **kwargs):
+    def get_sheet_data(self, sheet_name: str, load_data: bool, data_get_method: str, **kwargs):
         '''
         Params:
             - sheet_name: str: the specific sheet name to load, must match sheet name in Excel file
+            - data_get_method: "API" or "DL", defaults to DL
             - load_data: True or False: whether to load the data into a Pandas dataframe; otherwise, will just get general info about the sheet used range
-            - get_method: "API" or "DL", defaults to DL
+            
         Sheet variables to return: 
             - sheet: O365.excel.WorkBook.WorkSheet object
             - sheet.name: worksheet name
@@ -290,7 +293,7 @@ class M365ExcelFileHandler:
             - sheet.max_row: maxiumum row containing data within the sheet
             - sheet.max_col: maxiumum column containing data within the sheet
             - sheet.column_to_name_map: mapping of column letters to names (i.e., {'A': 'Column 1', 'B': 'Column 2'}
-            - sheet.df **OPTIONAL**: sheet data represented as a Pandas DataFrame
+            - sheet.df: sheet data represented as a Pandas DataFrame (will be None if load_data = False)
         TODO: 
             - handle leading empty columns
             - column to datatype mapping???
@@ -298,16 +301,20 @@ class M365ExcelFileHandler:
         '''             
         sheet = self._wb.get_worksheet(sheet_name)
         sheet.name = sheet_name
-        if data_get_method.upper() == 'DL':
-            sheet.df = self._load_excel_sheet_to_df_download(sheet, **kwargs)
-        elif data_get_method.upper() == 'API':
-            sheet.df = self._load_excel_sheet_to_df_api(sheet, **kwargs)
+        sheet.used_range, sheet.max_row, sheet.max_col, sheet.min_row, sheet.min_col = self._sheet_get_used_range_fixed(sheet)
+        if load_data:
+            if data_get_method.upper() == 'DL':
+                sheet.df = self._load_excel_sheet_to_df_download(sheet, **kwargs)
+            elif data_get_method.upper() == 'API':
+                sheet.df = self._load_excel_sheet_to_df_api(sheet, **kwargs)
+            else:
+                raise Exception(f'Invalid "get_method" specified for loading sheet: {sheet_name}!')
         else:
-            raise Exception(f'Invalid "get_method" specified for loading sheet: {sheet_name}!')
+            sheet.df = None # set df attribute to None if not loading the sheet data
         return sheet
 
     def _load_excel_sheet_to_df_download(self, sheet: Type['O365.excel.WorkSheet'], **kwargs) -> pd.DataFrame:
-        df = self._downloaded_excel_file.parse(sheet.name, **kwargs)
+        df = self._downloaded_ExcelFile.parse(sheet.name, **kwargs)
         print(f'loaded df for {sheet.name}...')
         return df
     
@@ -323,7 +330,6 @@ class M365ExcelFileHandler:
             - end_row (optional): the end row to extract data from (defaults to the last row of data)
         ERROR: does not correctly convert datetime values
         '''
-        sheet.used_range, sheet.max_row, sheet.max_col, sheet.min_row, sheet.min_col = self._sheet_get_used_range_fixed(sheet)
         if sheet.used_range != None:        
             _column_headers = sheet.get_range(f'{sheet.min_col}{sheet.min_row}:{sheet.max_col}{sheet.min_row}').values[0]
             sheet.column_to_name_map = {self._convert_numeric_col_to_alphabetic(idx):col_name for (idx, col_name) in enumerate(_column_headers, start=1) if col_name != ''}
@@ -419,7 +425,7 @@ class M365ExcelFileHandler:
         max_col = re.findall(r'[a-zA-z]+', max_range_str)[0]
         
         return trunc_range_str, max_row, max_col, min_row, min_col
-
+    
     def _find_last_row_brute_method(self, file_object_id: str, sheet: Type['O365.excel.WorkSheet']):
         '''
         Get the last row through repeatedly requesting one row at a time from the MS Graph API

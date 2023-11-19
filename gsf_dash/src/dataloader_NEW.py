@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import pandas as pd
 import functools
 import re
@@ -17,8 +18,8 @@ from .utils import redirect_logging_to_file
 class Dataloader:
     account = MSAccount() # CLASS FOR HANDLING MS 365 API INTERACTIONS 
     
-    def __init__(self, select_date, db_engine_name: str = 'gsf_data', run: bool = False):
-        self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
+    def __init__(self, run_date, db_engine_name: str = 'gsf_data', run: bool = False):
+        self.run_date = pd.to_datetime(run_date).normalize() # Normalize run_date to remove potential time data and prevent possible key errors when selecting date range from data
         self.db_engine_name = db_engine_name
         self.db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_engine_name}.db", echo=False) # initialize sqlalchemy engine / sqlite database
         self.ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
@@ -35,7 +36,7 @@ class Dataloader:
         Method to tie together daily processes to run for downloading/loading/processing data and loading into a db table
         '''
         if not run_date:
-            run_date = self.select_date
+            run_date = self.run_date
         
         self.DailyDataLoad(dataloader_instance=self, run_date=run_date, lookback_days=lookback_days)
         self.DailyDataCalculate(dataloader_instance=self, run_date=run_date, lookback_days=lookback_days)
@@ -77,42 +78,97 @@ class Dataloader:
         
         init_tables()
         rebuild_db_run()
+
+    class saved_data:
+        pass
+        '''
+        empty subclass to save data from inner class calls for re-use
+        '''
     
-    class DailyDataLoad:
-        OUT_TABLE_NAME = 'ponds_data'
-        
+    class DBTableBase(ABC):
+            
         def __init__(self, dataloader_instance, run_date: datetime, lookback_days: int, run: bool = True):
+            if not hasattr(self, 'OUT_TABLE_NAME'):
+                raise Exception("ERROR: tried to create a DB Table class without first setting OUT_TABLE_NAME!")
+                
             self.dataloader_instance = dataloader_instance
-            self.select_date = run_date
+            self.run_date = run_date
+            self.lookback_days = lookback_days
             self.db_engine = dataloader_instance.db_engine
             self.account = dataloader_instance.account
             self.ponds_list = dataloader_instance.ponds_list
 
             if run:
-                daily_data_dfs = []
-                # Start with a "base_df" to ensure that a row every Date & PondID combination is included in the db, even if no data is found
-                date_range = pd.date_range(self.select_date-pd.Timedelta(days=lookback_days), self.select_date) # .map(lambda x: x.strftime('%Y-%m-%d')
-                lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, dataloader_instance.ponds_list])
-                base_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
-                daily_data_dfs.append(base_df)
-        
-                # Call method to process and load into db the daily data file 
-                daily_data_dfs.append(self.load_daily_data_prev_n_days(prev_num_days_to_load=lookback_days, specify_date=self.select_date))
-                
-                # Get data from scorecard file and add/update the database table for those entries ("Comments-Scorecard" & "Split Innoculum" [to indicate when a pond is harvested or split])
-                # Reload data for past 5 days (in case any of it changed) 
-                daily_data_dfs.append(self.load_scorecard_data(begin_date=self.select_date-pd.Timedelta(days=lookback_days), end_date=self.select_date))
-    
-                # Combine "daily data" and "scorecard" dataframes
-                joined_daily_df = functools.reduce(lambda df1, df2: pd.merge(df1, df2, on=['Date','PondID'], how='outer'), daily_data_dfs)
+                self.run()
 
-                # update the db (calling a function from .db_utils.py that deletes the existing db table row (based on Date&PondID cols) and appends the new row from the update_data_df)
-                update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=joined_daily_df)
+        @abstractmethod
+        def run():
+            pass
+            '''
+            Extract, transform, and load data into database table (self.OUT_TABLE_NAME)
+            '''
+
+    class DailyDataLoad(DBTableBase):
+        OUT_TABLE_NAME = 'ponds_data'
+        
+        def __init__(self, dataloader_instance, run_date: datetime, lookback_days: int, run: bool = True):
+            self.OUT_TABLE_NAME = 'ponds_data'
+            
+            # init as base class after setting OUT_TABLE_NAME
+            super().__init__(dataloader_instance, run_date, lookback_days, run) 
+
+            # self.dataloader_instance = dataloader_instance
+            # self.run_date = run_date
+            # self.db_engine = dataloader_instance.db_engine
+            # self.account = dataloader_instance.account
+            # self.ponds_list = dataloader_instance.ponds_list
+
+            # if run:
+            #     daily_data_dfs = []
+            #     # Start with a "base_df" to ensure that a row every Date & PondID combination is included in the db, even if no data is found
+            #     date_range = pd.date_range(self.run_date-pd.Timedelta(days=lookback_days), self.run_date) # .map(lambda x: x.strftime('%Y-%m-%d')
+            #     lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, dataloader_instance.ponds_list])
+            #     base_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
+            #     daily_data_dfs.append(base_df)
+        
+            #     # Call method to process and load into db the daily data file 
+            #     daily_data_dfs.append(self.load_daily_data_prev_n_days(prev_num_days_to_load=lookback_days, specify_date=self.run_date))
+                
+            #     # Get data from scorecard file and add/update the database table for those entries ("Comments-Scorecard" & "Split Innoculum" [to indicate when a pond is harvested or split])
+            #     # Reload data for past 5 days (in case any of it changed) 
+            #     daily_data_dfs.append(self.load_scorecard_data(begin_date=self.run_date-pd.Timedelta(days=lookback_days), end_date=self.run_date))
+    
+            #     # Combine "daily data" and "scorecard" dataframes
+            #     joined_daily_df = functools.reduce(lambda df1, df2: pd.merge(df1, df2, on=['Date','PondID'], how='outer'), daily_data_dfs)
+
+            #     # update the db (calling a function from .db_utils.py that deletes the existing db table row (based on Date&PondID cols) and appends the new row from the update_data_df)
+            #     update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=joined_daily_df)
+
+        def run(self):
+            daily_data_dfs = []
+            # Start with a "base_df" to ensure that a row every Date & PondID combination is included in the db, even if no data is found
+            date_range = pd.date_range(self.run_date-pd.Timedelta(days=self.lookback_days), self.run_date) # .map(lambda x: x.strftime('%Y-%m-%d')
+            lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, self.ponds_list])
+            base_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
+            daily_data_dfs.append(base_df)
+    
+            # Call method to process and load into db the daily data file 
+            daily_data_dfs.append(self.load_daily_data_prev_n_days(prev_num_days_to_load=self.lookback_days, specify_date=self.run_date))
+            
+            # Get data from scorecard file and add/update the database table for those entries ("Comments-Scorecard" & "Split Innoculum" [to indicate when a pond is harvested or split])
+            # Reload data for past 5 days (in case any of it changed) 
+            daily_data_dfs.append(self.load_scorecard_data(begin_date=self.run_date-pd.Timedelta(days=self.lookback_days), end_date=self.run_date))
+
+            # Combine "daily data" and "scorecard" dataframes
+            joined_daily_df = functools.reduce(lambda df1, df2: pd.merge(df1, df2, on=['Date','PondID'], how='outer'), daily_data_dfs)
+
+            # update the db (calling a function from .db_utils.py that deletes the existing db table row (based on Date&PondID cols) and appends the new row from the update_data_df)
+            update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=joined_daily_df)
     
         def load_daily_data_prev_n_days(self, prev_num_days_to_load: int, specify_date: datetime = None):
-            # load class variable 'select_date' if custom parameter not provided
+            # load class variable 'run_date' if custom parameter not provided
             if not specify_date:
-                specify_date = self.select_date
+                specify_date = self.run_date
             start_date = specify_date - pd.Timedelta(days=prev_num_days_to_load)
             day_dfs = []
             for idx, d in enumerate(rrule(DAILY, dtstart=start_date, until=specify_date)):
@@ -259,12 +315,12 @@ class Dataloader:
     
             params:
             --------
-            - specify_date: - date to get daily data for (defaults to self.select_date if not specified)
+            - specify_date: - date to get daily data for (defaults to self.run_date if not specified)
                             - must be in "yyyy-mm-dd" format
                 
             RETURNS -> pd.ExcelFile object (if successful download) or None (if failure)
             '''
-            specify_date = self.select_date if specify_date == '' else datetime.strptime(specify_date, "%Y-%m-%d")
+            specify_date = self.run_date if specify_date == '' else datetime.strptime(specify_date, "%Y-%m-%d")
             folder_id = load_setting('daily_data_info')['folder_id']
             for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
                 # first look for the "year" directory
@@ -303,7 +359,7 @@ class Dataloader:
                 all_df_list = []
                 for pond_id in self.ponds_list:
                     try: 
-                        pond_df = sc_file.sheet_data.get(pond_id).df
+                        pond_df = sc_file.sheets_data.get(pond_id).df
                     except:
                         print(f'No scorecard data available for PondID: {pond_id}. Skipping...')
                         continue
@@ -322,20 +378,40 @@ class Dataloader:
             out_df = out_df[out_df['Date'].between(begin_date, end_date)]
             return out_df
 
+        def load_co2_consumption_data(self, begin_date: datetime, end_date: datetime):     
+            # save loaded file as a class attribute in case of using multiple successive calls to this method
+            if not hasattr(self.dataloader_instance, '_co2_consumption_data'):
+                print('Loading co2 consumption file...')
+                file_id = load_setting('file_ids').get('co2_consumption')
+                co2_df = M365ExcelFileHandler(file_object_id=file_id, load_data=True, data_get_method='DL', ignore_sheets=['2017', 'Troubleshooting'], concat_sheets=True).concat_df
+                # filter columns to just Date and Daily Consumption (lbs)
+                co2_df = co2_df[['Date', 'Daily Consumption (lbs)']].dropna()
+                self.dataloader_instance._co2_consumption_data = co2_df
+            else:
+                print('loaded co2 data already processed')
+                co2_df = self.dataloader_instance._co2_consumption_data
+            print('testing autoreload...')    
+            return co2_df[co2_df['Date'].between(begin_date, end_date)]
+            
     class DailyDataCalculate:
         REF_QUERY_TABLE_NAME = 'ponds_data'
         OUT_TABLE_NAME = 'ponds_data_calculated'
         
         def __init__(self, dataloader_instance, run_date: datetime, lookback_days: int, run: bool = True):
-            self.select_date = run_date
+            self.dataloader_instance = dataloader_instance
+            self.run_date = run_date
             self.db_engine = dataloader_instance.db_engine
             self.account = dataloader_instance.account
 
-             # Load data necessary for calculations from the ref data table
-            # (query_data_table_by_date_range function returns a DataFrame)
-            self.ref_data_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name=self.REF_QUERY_TABLE_NAME, query_date_start=self.select_date-pd.Timedelta(days=lookback_days), query_date_end=self.select_date, col_names=["Filter AFDW", "Depth", "% Nanno", "Split Innoculum"]) # Date and PondID automatically included
-            
             if run:
+                # Load data necessary for calculations from the ref data table
+                # (query_data_table_by_date_range function returns a DataFrame)
+                self.ref_data_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                              table_name=self.REF_QUERY_TABLE_NAME, 
+                                                              query_date_start=self.run_date-pd.Timedelta(days=lookback_days), 
+                                                              query_date_end=self.run_date, 
+                                                              col_names=["Filter AFDW", "Depth", "% Nanno", "Split Innoculum"]) # Date and PondID automatically included
+
                 # Run calculations and collect in a df
                 calc_df = self.base_calculations(self.ref_data_df)
             
@@ -439,8 +515,8 @@ class Dataloader:
             return calcs_df
 
         def calc_harvested_split(self) -> pd.DataFrame:
-            df_ref_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=self.select_date-pd.Timedelta(days=5), query_date_end=self.select_date, col_names=['Split Innoculum'])
-            df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=self.select_date-pd.Timedelta(days=5), query_date_end=self.select_date, col_names=None)
+            df_ref_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=self.run_date-pd.Timedelta(days=5), query_date_end=self.run_date, col_names=['Split Innoculum'])
+            df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=self.run_date-pd.Timedelta(days=5), query_date_end=self.run_date, col_names=None)
            
             output_df = df_data_calcs.copy()
             for pond_id in output_df['PondID'].unique():
@@ -496,6 +572,50 @@ class Dataloader:
             output_df = output_df.drop([col for col in output_df.columns if '_tmp_' in col], axis=1)
             return output_df
 
+        def _download_load_co2_consumption_data(self, begin_date: datetime, end_date: datetime) -> pd.DataFrame:     
+            # save loaded file as a class attribute in case of using multiple successive calls to this method
+            if not hasattr(self.dataloader_instance, '_co2_consumption_data'):
+                print('Loading co2 consumption file...')
+                file_id = load_setting('file_ids').get('co2_consumption')
+                co2_df = M365ExcelFileHandler(file_object_id=file_id, load_data=True, data_get_method='DL', ignore_sheets=['2017', 'Troubleshooting'], concat_sheets=True).concat_df
+                # filter columns to just Date and Daily Consumption (lbs)
+                co2_df = co2_df[['Date', 'Daily Consumption (lbs)']].dropna().rename(columns={'Daily Consumption (lbs)': 'Daily Consumption'})
+                self.dataloader_instance._co2_consumption_data = co2_df
+            else:
+                co2_df = self.dataloader_instance._co2_consumption_data
+            return co2_df[co2_df['Date'].between(begin_date, end_date)]
+
+        def load_co2_consumption_per_pond(self, begin_date: datetime, end_date: datetime) -> pd.DataFrame:
+            # query the mass data from db to start calculations
+            ponds_mass_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=begin_date, query_date_end=end_date, col_names=['calc_mass_nanno_corrected'])
+            # replace 0's with None and backfill to ensure that the mass column is not empty or zero (otherwise causes division errors)
+            ponds_mass_df['calc_mass_nanno_corrected'] = ponds_mass_df['calc_mass_nanno_corrected'].replace(0,None).bfill()
+
+            # subtotal the calculated mass by day, and set as a column value in the df
+            daily_mass_totals = ponds_mass_df.groupby('Date').sum().reset_index().rename(columns={'calc_mass_nanno_corrected': 'total_mass'})
+            ponds_mass_df['date_total_mass'] = ponds_mass_df.apply(lambda row: daily_mass_totals.loc[daily_mass_totals['Date'] == row['Date'], 'total_mass'].item(), axis=1)
+            # replace 0's with None and backfill to ensure that the mass column is not empty or zero (otherwise causes division errors)
+            ponds_mass_df['date_total_mass'] = ponds_mass_df['date_total_mass'].replace(0,None).bfill()
+            
+            # join the co2 total consumption data with the df
+            co2_df = self._download_load_co2_consumption_data(begin_date, end_date)
+            def _load_co2_consumption(row):
+                try:
+                    return co2_df[co2_df['Date'] == row['Date']]['Daily Consumption'].values[0]
+                except:
+                    return 0
+            ponds_mass_df['date_total_co2_consumption'] = ponds_mass_df.apply(lambda row: _load_co2_consumption(row), axis=1)
+            
+            # calculate the co2 consumption per pond
+            def _calc_daily_consumption(row):
+                if row['date_total_co2_consumption'] == 0 or None in (row['calc_mass_nanno_corrected'], row['date_total_mass']):
+                    return 0
+                else:
+                    return (row['calc_mass_nanno_corrected'] / row['date_total_mass']) * row['date_total_co2_consumption']
+        
+            ponds_mass_df['calc_co2_consumption'] = ponds_mass_df.apply(lambda row: _calc_daily_consumption(row), axis=1)
+            return ponds_mass_df[['Date', 'PondID', 'calc_co2_consumption']]
+
     class PnLCalculate:
         REF_QUERY_TABLE_NAME = 'ponds_data'
         OUT_TABLE_NAME = 'ponds_data_expenses'
@@ -514,7 +634,7 @@ class Dataloader:
 
         def __init__(self, dataloader_instance, run_date: datetime, lookback_days: int, run: bool = True):
             self.dataloader_instance = dataloader_instance
-            self.select_date = run_date
+            self.run_date = run_date
             self.db_engine = dataloader_instance.db_engine
             self.account = dataloader_instance.account
             self.ref_data_df = self.load_chem_usage(lookback_days=lookback_days)
@@ -537,7 +657,7 @@ class Dataloader:
         def load_chem_usage(self, lookback_days):
             # query the chemical usage amounts from db
             data_col_names = [v['data_column'] for v in self.chem_costs.values()]
-            data_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name=self.REF_QUERY_TABLE_NAME, query_date_start=self.select_date-pd.Timedelta(days=lookback_days), query_date_end=self.select_date, col_names=data_col_names)
+            data_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name=self.REF_QUERY_TABLE_NAME, query_date_start=self.run_date-pd.Timedelta(days=lookback_days), query_date_end=self.run_date, col_names=data_col_names)
             return data_df.fillna(0) # fill in zeroes for NaN chemical usage values
             
         def chemical_cost_calculations(self) -> None:
@@ -576,7 +696,6 @@ class Dataloader:
                 epa_df = self.dataloader_instance._epa_df.copy()
                 epa_df = epa_df[epa_df['Date'].between(self.run_date - pd.Timedelta(days=lookback_days), self.run_date)]
 
-                
                 # update the db (calling a function from .db_utils.py)
                 update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=epa_df)
             
@@ -710,16 +829,16 @@ class Dataloader:
             if None in return_vals.values():
                 raise Exception("ERROR: epa data all good but 'None' still in return values, missing a value assignment in dict?")
             return return_vals.values()
-                      
+
 ############# TODO: update growth calculation with method using db
-#         def calculate_growth(pond_data_df, select_date, num_days, remove_outliers, data_count_threshold=2, weighted_stats_for_outliers=True):
+#         def calculate_growth(pond_data_df, run_date, num_days, remove_outliers, data_count_threshold=2, weighted_stats_for_outliers=True):
 #             '''
 #             NEW **** MOVED TO DATALOADER, UTILIZE DATABASE TO QUERY/CALCULATE THIS?? ****
 #             NOT UPDATED YET
             
 #             pond_data_df: pandas dataframe
 #                 - dataframe for individual pond
-#             select_date: datetime.date
+#             run_date: datetime.date
 #                 - current date (required for growth relative to this date)
 #             remove_outliers: bool
 #                 - whether to remove outliers from the data before calculating growth (which are then zeroed and forward-filled)
@@ -745,7 +864,7 @@ class Dataloader:
 #             pond_test=None # set to pond_name string for printing output at intermediate calculation steps
             
 #             # Select last 20 days of data for columns 'AFDW', 'Depth', and 'Split Innoculum' (higher num in case of missing data, etc)
-#             pond_growth_df = pond_data_df.loc[select_date - pd.Timedelta(days=20):select_date][['AFDW (filter)', 'Depth', 'Split Innoculum']]
+#             pond_growth_df = pond_data_df.loc[run_date - pd.Timedelta(days=20):run_date][['AFDW (filter)', 'Depth', 'Split Innoculum']]
 #             # Get calculated mass column from AFDW and Depth
 #             pond_growth_df['mass'] = afdw_depth_to_mass(pond_growth_df['AFDW (filter)'], pond_growth_df['Depth'], pond_name)
             
@@ -779,7 +898,7 @@ class Dataloader:
 #             if remove_outliers: # calculate and drop outliers
 #                 # get a new df for outlier detection and drop the last/ most recent row, 
 #                 # assuming it is highly likely an outlier (due to data entry error, etc), so exclude that value from calc of mean and std dev for detecting outliers
-#                 mass_nonzero_ = pond_growth_df.drop([select_date], axis=0) 
+#                 mass_nonzero_ = pond_growth_df.drop([run_date], axis=0) 
 #                 mass_nonzero_ = mass_nonzero_[mass_nonzero_['mass'] != 0]['mass'] # get a pandas series with only nonzero values for calculated mass
 #                 # limit selection for outlier detection to the last 10 non-zero values
 #                 mass_nonzero_ = mass_nonzero_.iloc[-10:]
@@ -831,7 +950,7 @@ class Dataloader:
 #                     display(pond_growth_df)
             
 #             # check if enough data exists for calculating growth, and return 'n/a' early if not
-#             growth_period_data_count = pond_growth_df.loc[select_date - pd.Timedelta(days=num_days-1):select_date][pond_growth_df['mass'] != 0]['mass'].count()
+#             growth_period_data_count = pond_growth_df.loc[run_date - pd.Timedelta(days=num_days-1):run_date][pond_growth_df['mass'] != 0]['mass'].count()
 #             if growth_period_data_count < data_count_threshold:
 #                 return 'n/a'
             
@@ -857,7 +976,7 @@ class Dataloader:
     
 #             # calculate growth
 #             try:
-#                 daily_growth_rate_ = int(pond_growth_df.loc[select_date - pd.Timedelta(days=num_days-1):select_date]['day chng'].sum() / num_days)
+#                 daily_growth_rate_ = int(pond_growth_df.loc[run_date - pd.Timedelta(days=num_days-1):run_date]['day chng'].sum() / num_days)
 #                 if pond_name == pond_test:
 #                     display(daily_growth_rate_)
 #                 return daily_growth_rate_
@@ -883,7 +1002,7 @@ class Dataloader:
     #     sc_file = M365ExcelFileHandler(excel_file_id, load_data=True, ignore_sheets=['Analysis', 'Template', 'Notes'])
     #     pond_df_list = []
     #     for pond_id in self.ponds_list:
-    #         pond_df = sc_file.sheet_data.get(pond_id).df
+    #         pond_df = sc_file.sheets_data.get(pond_id).df
     #         pond_df.columns.values[0] = 'Date' # rename the first column to date, since it's always the pond id listed here on these sheets (but it's the date index col)
     #         print('testetsetsetsts date', pond_df['Date'])
     #         pond_df = pond_df[pond_df['Date'].between(begin_date, end_date)]
@@ -1002,7 +1121,7 @@ class Dataloader:
     
     # def load_epa_data(self, excel_epa_data_filenames: list, debug_print=False) -> dict:
     #     ponds_list = self.ponds_list
-    #     select_date = self.select_date
+    #     run_date = self.run_date
         
     #     def process_excel_file(excel_filename):
     #         # create a dict with an empty list for each pond number (to store date and epa value)
@@ -1071,12 +1190,12 @@ class Dataloader:
     #         date_search = re.search(r'(?<!\S)\d{6}(?!\S)',sample_label)
     #         if date_search:
     #             date = datetime.strptime(date_search.group(), "%y%m%d")
-    #             diff_days = (select_date-date).days
-    #             # check if select date is before the epa value date (in which case this epa data row should be skipped to ensure that the report is using data relative to the select_date)
-    #             # or if the epa value date is over 60 days older than the select_date, in which case it should also be skipped because the data is too old to be useful
+    #             diff_days = (run_date-date).days
+    #             # check if select date is before the epa value date (in which case this epa data row should be skipped to ensure that the report is using data relative to the run_date)
+    #             # or if the epa value date is over 60 days older than the run_date, in which case it should also be skipped because the data is too old to be useful
     #             if diff_days < 0 or diff_days > 60:
     #                 if debug_print:
-    #                     print(f'ERROR: sample date after \'{select_date}\' or sample over 60 day threshold')
+    #                     print(f'ERROR: sample date after \'{run_date}\' or sample over 60 day threshold')
     #                 return
     #         else:
     #             if debug_print:
@@ -1151,11 +1270,11 @@ class Dataloader:
     # # checking if there is data in the 'Fo' column up to n-days (num_days_prior)
     # def generate_active_dict(self, pond_scorecard_data, num_days_prior):
     #     ponds_list = self.ponds_list
-    #     select_date = self.select_date
+    #     run_date = self.run_date
         
     #     def check_active_query(pond_name, prev_day_n): 
     #         try:
-    #             dat = pond_scorecard_data[pond_name][['Fo', 'Split Innoculum', 'Comments']].shift(prev_day_n).loc[select_date]
+    #             dat = pond_scorecard_data[pond_name][['Fo', 'Split Innoculum', 'Comments']].shift(prev_day_n).loc[run_date]
     #             # check if pond is noted as "I" for inactive in the "Split Innoculum" column, or some variation of 'harvest complete' in the "Comments" column
     #             # if so, break immediately and return False in the outer function (return that the particular pond is "inactive")
     #             if str(dat[1]).upper() == 'I' or any(x in str(dat[2]).lower() for x in ['harvest complete', 'complete harvest', 'complete transfer']): 

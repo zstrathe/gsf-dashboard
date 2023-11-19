@@ -162,7 +162,7 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
 
     Returns
     --------
-    pd.DataFrame
+    pd.DataFrame (including "Date" and "PondID" fields by default, so they do not need to be specified in col_names parameter!
     '''
     # check if db_name_or_engine is a sqlalchemy.Engine instance...otherwise load the engine
     if not isinstance(db_name_or_engine, sqlalchemy.Engine):
