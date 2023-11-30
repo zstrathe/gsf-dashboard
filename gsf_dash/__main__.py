@@ -56,7 +56,7 @@ def main(argv):
     # LOADS DATE INTO DB FOR CURRENT DATE (AND 4 DAYS PRIOR, IN CASE OF DATA UPDATES AND/OR MISSED RUNS)
     try:
         from src.dataloader_NEW import Dataloader as Dataloader_NEW
-        db_dataloader = Dataloader_NEW(args.date, run=True) # NEED TO UPDATE TO USE datetime as date argument!!!
+        db_dataloader = Dataloader_NEW(run_date=date_dt) # NEED TO UPDATE TO USE datetime as date argument!!!
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error with loading daily data into db!', tb)
