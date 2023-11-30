@@ -74,14 +74,17 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
     update_data_df.to_sql(name='temp_table', con=db_engine, if_exists='replace', index=False)
     
     # construct a statement to first insert primary key pairs into the table if they don't already exist (ignore if they do exist using INSERT OR IGNORE for sqlite)
-    pk_vals = ", ".join([str(tuple(sublist)) for sublist in update_data_df[pk_cols].values.tolist()])
-    sql_insert_keys_stmt = f'INSERT OR IGNORE INTO {db_table_name} ({", ".join(pk_cols)}) VALUES {pk_vals};'
+    pk_vals = ', '.join(['(' + ', '.join([f'"{i}"' for i in sublist]) + ')' for sublist in update_data_df[pk_cols].values.tolist()])
+    '''
+    pk_vals formatted as string example: "('2023-09-01', '0401'), ('2023-09-02', '0401'), ... "
+    '''
+    sql_insert_keys_stmt = f'INSERT OR IGNORE INTO {db_table_name} ({", ".join(pk_cols) if len(pk_cols) > 1 else pk_cols[0]}) VALUES {pk_vals};'
     sql_insert_keys_stmt = sqlalchemy.text(sql_insert_keys_stmt)
     
     # check that all columns being updated, as well as the primary key column arguments, are present in the database table. raise an exception if not
     db_table_col_names = get_db_table_columns(db_engine, db_table_name)
     if not all([col in db_table_col_names for col in list(update_data_df.columns)+pk_cols]): # add pk_cols to check list just in case columns were provided that do not exist in db table
-        raise Exception(f'ERROR: columns to update are not present in table: {db_table_name}!')
+        raise Exception(f'ERROR: columns to update are not present in table: {db_table_name}!\nColumns: {update_data_df.columns.tolist()}')
     
     # construct sql UPDATE FROM string
     # This works with Sqlite, but may need replaced if migrating to another database type
@@ -147,7 +150,7 @@ def query_data_table_by_date(db_name_or_engine: str|sqlalchemy.Engine, table_nam
         out_df = convert_df_Date_col(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
         return out_df
 
-def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None) -> pd.DataFrame:
+def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None, raise_exception_on_error: bool =True, check_safe_date: bool = False) -> pd.DataFrame:
     '''
     Helper function to query data from a database table for a specified date
 
@@ -158,8 +161,10 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
     query_date_start: datetime
     query_date_end: datetime
     col_names: list of column names (strings) to return or None
-        - if None -> returns all columns??
-
+        - if None -> returns all columns
+    raise_exception_on_error: bool :  if query fails, default (True) is to raise Exception; however if set to False this parameter will allow None to be returned instead
+    check_safe_date: bool: if True, check for the first available date in the db table and override the query_date_start param; otherwise if False (default) do not override 
+    
     Returns
     --------
     pd.DataFrame (including "Date" and "PondID" fields by default, so they do not need to be specified in col_names parameter!
@@ -169,7 +174,9 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
         db_engine = sqlalchemy.create_engine(f"sqlite:///db/{db_name_or_engine}.db", echo=False)
     else:
         db_engine = db_name_or_engine
-        
+
+    query_date_start_dt = query_date_start
+    query_date_end_dt = query_date_end
     query_date_start = query_date_start.strftime("%Y-%m-%d")
     query_date_end = query_date_end.strftime("%Y-%m-%d")
 
@@ -183,12 +190,31 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
     else:
         table_obj = load_table(db_engine, table_name)
         with db_engine.begin() as conn:
+            
+            # when check_safe_date = True, get date from first row of db table, and if query_date_start is earlier than that date, then set query_date_start to the first row date
+            if check_safe_date:
+                #first_avail_date = conn.execute(sqlalchemy.text("SELECT Date FROM :table_name LIMIT 1;"), {'table_name': table_name}).fetchall() 
+                first_avail_date = conn.execute(sqlalchemy.select(table_obj.c["Date"])).first()[0]
+                if datetime.strptime(first_avail_date, "%Y-%m-%d") > query_date_start_dt:
+                    query_date_start = first_avail_date
+
+                last_avail_date = conn.execute(sqlalchemy.select(table_obj.c["Date"]).order_by(table_obj.c["Date"].desc())).first()[0]               
+                if datetime.strptime(last_avail_date, "%Y-%m-%d") < query_date_end_dt:
+                    query_date_end = last_avail_date
+
+            # execute query / different queries depending on whether filtering on column names or getting all columns
             if col_names:
                 output = conn.execute(sqlalchemy.select(*[table_obj.c[col] for col in col_names]).where((table_obj.c["Date"] >= query_date_start) & (table_obj.c["Date"] <= query_date_end))).fetchall()
             else:
                 output = conn.execute(sqlalchemy.select(table_obj).where((table_obj.c["Date"] >= query_date_start) & (table_obj.c["Date"] <= query_date_end))).fetchall()
+            
+            # raise Exception if output empty (unless when raise_exception_on_error = False)
             if len(output) == 0:
-                raise Exception(f'ERROR: could not query data from db for db_name: {db_name_or_engine}, table_name: {table_name}, query_date_start: {query_date_start}, query_date_end: {query_date_end}, col_names: {col_names}')
+                if raise_exception_on_error:
+                    raise Exception(f'ERROR: could not query data from db for db_name: {db_name_or_engine}, table_name: {table_name}, query_date_start: {query_date_start}, query_date_end: {query_date_end}, col_names: {col_names}')
+                else:
+                    # return empty df (with col_names specified plus "Date" and "PondID") if query resulted in no data and raise_exception_on_error = False
+                    return pd.DataFrame(columns=col_names)
         out_df = pd.DataFrame(output, columns=col_names)
         out_df = convert_df_Date_col(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
         return out_df
