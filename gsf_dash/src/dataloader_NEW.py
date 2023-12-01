@@ -157,11 +157,11 @@ class DailyDataLoad(DBColumnsBase):
     '''
     OUT_TABLE_NAME = 'ponds_data'
     
-    def __init__(self, **kwargs):
+    def __init__(self, *args, **kwargs):
         self.OUT_TABLE_NAME = 'ponds_data'
         
         # init as base class after setting OUT_TABLE_NAME
-        super().__init__(**kwargs) 
+        super().__init__(*args, **kwargs) 
 
     def run(self):
         daily_data_dfs = []
@@ -372,10 +372,10 @@ class ScorecardDataLoad(DBColumnsBase):
     '''
     OUT_TABLE_NAME = 'ponds_data'
     
-    def __init__(self, **kwargs):
+    def __init__(self, *args, **kwargs):
     
         # init as base class 
-        super().__init__(**kwargs)
+        super().__init__(*args, **kwargs)
 
     def run(self):
          # Get data from scorecard file and add/update the database table for those entries ("Comments-Scorecard" & "Split Innoculum" [to indicate when a pond is harvested or split])
@@ -421,9 +421,9 @@ class CO2ConsumptionLoad(DBColumnsBase):
     '''
     OUT_TABLE_NAME = 'agg_daily'
     
-    def __init__(self, **kwargs):
+    def __init__(self, *args, **kwargs):
         # init as base class 
-        super().__init__(**kwargs) 
+        super().__init__(*args, **kwargs) 
 
     def run(self):
         if not hasattr(self, '_co2_data'):
@@ -450,8 +450,8 @@ class EPALoad(DBColumnsBase):
     OUT_COLUMNS = ['epa_val', 'epa_val_total_fa', 'epa_actual_measurement']
     DEPENDENCY_CLASSES = ['GetActiveStatus'] # define class dependency that needs to be run prior to an instance of this class
     MIN_LOOKBACK_DAYS = 15 # override default daily update lookback days (from 5 to 15)
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
     def run(self):
         ## TODO: check if there's data available from M365 api to check if file has been updated?? then just store local file and re-download when necessary??
@@ -632,11 +632,18 @@ class EPALoad(DBColumnsBase):
         return return_vals.values()
 
 class GetActiveStatus(DBColumnsBase):
+    '''
+    Get the "active status" of each pond. Normally, if it has a 'Filter AFDW' and 'Fo' measurement, it would be considered 'Active'
+    However, to handle occasional lags in data reporting, this status query determines if a pond should be considered active by checking previous dates
+    If any rows within the 'max_check_days' int var have 'Filter AFDW' and 'Fo' measurements, then they will still be considered 'Active'.
+    If any row, in the 'Split Innoculum' column, is preceded by 'HC' for the previous date (or 'I' for the current date and 'H' 
+    for the previous date [old way of reporting]), then that row is noted as 'Inactive'
+    '''
     OUT_TABLE_NAME = 'ponds_data_calculated'
     DEPENDENCY_CLASSES = ['DailyDataLoad'] # define class dependency that needs to be run prior to an instance of this class
     
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
     def run(self):
         active_df = self._get_ponds_active_status(begin_date=self.run_date_start, end_date=self.run_date_end) # gets df with 'active_status' col
@@ -661,10 +668,12 @@ class GetActiveStatus(DBColumnsBase):
             
             # iterate through check_df rows in reverse order
             for row_idx, row_data in check_df.iterrows():
-                # first check if there's any value other than None or 0 in the 'Fo' column
+                # first check if there's any value in the 'Time Sampled' column
+                # next, check if there is a value in either of the 'Filter AFDW' or 'Fo' columns (and that they are not zero)
                 # if so, then consider the pond as active
-                if not pd.isna(row_data['Fo']) and row_data['Fo'] != 0:
-                    return True
+                if not pd.isna(row_data['Time Sampled']):
+                    if (not pd.isna(row_data['Filter AFDW']) and row_data['Filter AFDW'] != 0) or (not pd.isna(row_data['Fo']) and row_data['Fo'] != 0):
+                        return True
                 # else, if this is not the last item being iterated, check the next index value of 'Split Innoculum' column
                 # for the prior day (but checking next index because of reversed order): "HC" value indicates complete harvest, 
                 # meaning that the pond is inactive if iteration reached this point
@@ -678,7 +687,7 @@ class GetActiveStatus(DBColumnsBase):
             return False
         
         query_begin_date = begin_date - pd.Timedelta(days=max_check_days)
-        ref_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=begin_date-pd.Timedelta(days=max_check_days), query_date_end=end_date, col_names=['Fo', 'Split Innoculum'])
+        ref_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=begin_date-pd.Timedelta(days=max_check_days), query_date_end=end_date, col_names=['Time Sampled', 'Fo', 'Split Innoculum', 'Filter AFDW'])
         out_df = ref_df.loc[ref_df['Date'] >= begin_date, :].copy()
        
         for pond_id in out_df['PondID'].unique():
@@ -691,8 +700,8 @@ class MassVolumeHarvestableCalculations(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
     DEPENDENCY_CLASSES = ['DailyDataLoad'] # define class dependency that needs to be run prior to an instance of this class
   
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
     def run(self):
         # Load data necessary for calculations from the ref data table
@@ -793,27 +802,154 @@ class MassVolumeHarvestableCalculations(DBColumnsBase):
 
 class CalcMassGrowth(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
-    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations'] # define class dependency that needs to be run prior to an instance of this class
-   
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus'] # define class dependency that needs to be run prior to an instance of this class
+    MIN_LOOKBACK_DAYS = 7
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
     def run(self):
         pass
-        # growth_df = self._calc_growth(start_date=self.run_date_start, end_date=self.run_date_end) 
+           
+    def _calc_growth(self, start_date, end_date):
+        # query data to calculate 'liters' (from depth) 
+        # and 'normalized liters' by converting liters with conversion factor (ratio of 'Filter AFDW' value compared to 0.50)
+        ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Filter AFDW', 'Depth'])
+        inches_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
+        ref_df1['liters'] = ref_df1['Depth'].apply(lambda depth_val: inches_to_liters * depth_val)
+        ref_df1['afdw_norm_factor'] = ref_df1['Filter AFDW'] / 0.50
+        ref_df1['normalized_liters'] = ref_df1['liters'] * ref_df1['afdw_norm_factor']
 
+        # query calculated fields further used in this calculation
+        ref_df2 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['active_status', 'est_harvested', 'calc_mass_nanno_corrected'])
+
+        # join the queried dataframes
+        calc_df = pd.merge(ref_df1, ref_df2, on=['Date', 'PondID'], how='outer')
+
+        # set index as Date so that df.rolling() and df.shift() functions will work with days (to handle gaps in ponds being active)
+        calc_df = calc_df.set_index('Date') 
+        for pond_id in calc_df['PondID'].unique():
+            # first, set mask only on PondID field and backfill necessary data cols            
+            mask = (calc_df['PondID'] == pond_id) # (calc_df['active_status'] == True
+            calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5) # backfill calculated mass for missing days (weekends, etc)
+            calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']].dropna() # drop rows that are still N/A after backfill
+            
+            # second, update mask to include 'active' ponds only
+            mask = (calc_df['PondID'] == pond_id) & (calc_df['active_status'] == True)
+            calc_df.loc[mask, :] = calc_df.loc[mask, :].fillna(0) # fill in n/a values for .rolling().sum() to calculate rolling sums (otherwise NaN values cause it to not work)
+
+            # calculate rolling harvested amount for past 7-days
+            # since the 'calc_mass_nanno_corrected' includes the harvested amount for the day when harvested, then shift this rolling window by
+            # 1 day and actually only get a 6-day rolling sum (this ensures that harvests are not being counted on the same day) 
+            calc_df.loc[mask, 'rolling_7_day_harvested_mass'] = calc_df.loc[mask, 'est_harvested'].shift(1).rolling('6d').sum()
+            
+            # get the 'liters', 'normalized liters', and 'calc_mass' from 7-days ago for ease of calculation
+            calc_df.loc[mask, 'liters_7_days_prev'] = calc_df.loc[mask, 'liters'].shift(7, freq='D')
+            calc_df.loc[mask, 'normalized_liters_7_days_prev'] = calc_df.loc[mask, 'normalized_liters'].shift(7, freq='D')
+            calc_df.loc[mask, 'mass_7_days_prev'] = calc_df.loc[mask, 'calc_mass_nanno_corrected'].shift(7, freq='D')
+            
+            # calculate the net 7-day mass change in both kilograms and grams
+            calc_df.loc[mask, '7_day_mass_change_kg'] = (calc_df.loc[mask, 'rolling_7_day_harvested_mass'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7_days_prev'])
+            calc_df.loc[mask, '7_day_mass_change_grams'] = calc_df.loc[mask, '7_day_mass_change_kg']*1000
+            
+            # calculate growth
+            calc_df.loc[mask, '7d_growth'] = calc_df.loc[mask, '7_day_mass_change_grams'] / calc_df.loc[mask, 'liters_7_days_prev']
+            calc_df.loc[mask, '7d_normalized_growth'] = calc_df.loc[mask, '7_day_mass_change_grams'] / calc_df.loc[mask, 'normalized_liters_7_days_prev']
+
+        # reset index so that 'Date' is a column again
+        calc_df = calc_df.reset_index()
+
+        calc_df = calc_df[['Date', 'PondID', '7d_growth', '7d_normalized_growth']]
+        
         # # update the db (calling a function from .db_utils.py)
         # update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=growth_df)
+        calc_df.to_excel('test_pond_growth_output.xlsx')
 
-    def _calc_growth(self, start_date, end_date):
+class CalcAggMassGrowth(DBColumnsBase):
+    OUT_TABLE_NAME = 'ponds_data_calculated'
+    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus'] # define class dependency that needs to be run prior to an instance of this class
+    MIN_LOOKBACK_DAYS = 7
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    def run(self):
         pass
+           
+    def _calc_growth(self, start_date, end_date):
+        # query data to calculate 'liters' (from depth) 
+        # and 'normalized liters' by converting liters with conversion factor (ratio of 'Filter AFDW' value compared to 0.50)
+        ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Filter AFDW', 'Depth'])
+        inches_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
+        ref_df1['liters'] = ref_df1['Depth'].apply(lambda depth_val: inches_to_liters * depth_val)
+        ref_df1['afdw_norm_factor'] = ref_df1['Filter AFDW'] / 0.50
+        ref_df1['normalized_liters'] = ref_df1['liters'] * ref_df1['afdw_norm_factor']
+        
+        # query calculated fields further used in this calculation
+        ref_df2 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['active_status', 'est_harvested', 'calc_mass_nanno_corrected'])
+
+        # join the queried dataframes
+        calc_df = pd.merge(ref_df1, ref_df2, on=['Date', 'PondID'], how='outer')
+        
+        # set index as Date so that df.rolling() and df.shift() functions will work with days (to handle gaps in ponds being active)
+        calc_df = calc_df.set_index('Date') 
+
+        # iterate through PondIDs and backfill missing data in the 'normalized_liters' and 'calc_mass_nanno_corrected' columns
+        for pond_id in calc_df['PondID'].unique():
+            mask = (calc_df['PondID'] == pond_id) 
+            calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5) # backfill calculated mass for missing days (weekends, etc)
+        # drop any rows which now contain N/A values for either 'normalized_liters' or 'calc_mass_nanno_corrected'
+        # most being dropped here are probably just 'inactive' but this should catch any other cases with data missing for whatever reason
+        calc_df = calc_df.dropna(how='any', subset=['normalized_liters', 'calc_mass_nanno_corrected']) 
+
+        # filter out inactive ponds
+        # But do it AFTER backfilling data, to ensure that data isn't backfilled over gaps where a pond isn't active
+        # (therefore, data will be backfilled into non-active days, but then that backfilled data is removed at this step as it isn't valid anyway)
+        calc_df = calc_df[calc_df['active_status'] == True]
+        
+        # fill in any missing values (that weren't forward filled) with zero
+        calc_df = calc_df.fillna(0)
+
+        # subtotal all active ponds by 'Date'
+        calc_df = calc_df.groupby(by=['Date']).sum().reset_index()
+        # set 'Date' as index for .rolling() and .shift() to work with daily frequency
+        calc_df = calc_df.set_index('Date') 
+        
+        # calculate rolling harvested amount for past 7-days
+        # since the 'calc_mass_nanno_corrected' includes the harvested amount for the day when harvested, then shift this rolling window by
+        # 1 day and actually only get a 6-day rolling sum (this ensures that harvests are not being counted on the same day) 
+        calc_df['rolling_7_day_harvested_mass'] = calc_df['est_harvested'].shift(1).rolling('6d').sum()
+        
+        # get the 'liters', 'normalized liters', and 'calc_mass' from 7-days ago for ease of calculation
+        calc_df['liters_7_days_prev'] = calc_df['liters'].shift(7, freq='D')
+        calc_df['normalized_liters_7_days_prev'] = calc_df['normalized_liters'].shift(7, freq='D')
+        calc_df['mass_7_days_prev'] = calc_df['calc_mass_nanno_corrected'].shift(7, freq='D')
+        
+        # calculate the net 7-day mass change in both kilograms and grams
+        calc_df['7_day_mass_change_kg'] = calc_df['rolling_7_day_harvested_mass'] + calc_df['calc_mass_nanno_corrected'] - calc_df['mass_7_days_prev']
+        calc_df['7_day_mass_change_grams'] = calc_df['7_day_mass_change_kg'] * 1000
+        
+        # calculate 7-day aggregrate growth (in grams/Liter/day)
+        calc_df['7d_agg_growth'] = calc_df['7_day_mass_change_grams'] / calc_df['liters_7_days_prev']
+        calc_df['7d_agg_normalized_growth'] = calc_df['7_day_mass_change_grams'] / calc_df['normalized_liters_7_days_prev']
+
+        # reset index so that 'Date' is a column again
+        calc_df = calc_df.reset_index()
+        
+        # calculate 7-day aggregate normalized (to equivalent of Liters if the AFDW was 0.50) growth (in grams/Liter/day)
+        calc_df = calc_df[['Date', '7d_agg_growth', '7d_agg_normalized_growth']]
+        
+        # # update the db (calling a function from .db_utils.py)
+        # update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=growth_df)
+        calc_df.to_excel('test_agg_growth_output.xlsx')
+        
 
 class CalcHarvestedSplit(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
     DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations'] # define class dependency that needs to be run prior to an instance of this class
    
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
     def run(self):
         hs_df = self._calc_harvested_split(start_date=self.run_date_start, end_date=self.run_date_end) # gets df with 'active_status' col
@@ -884,8 +1020,8 @@ class GetPondHealthStatusCode(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
     DEPENDENCY_CLASSES = ['DailyDataLoad', 'GetActiveStatus', 'EPALoad'] # define class dependency that needs to be run prior to an instance of this class
   
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
     def run(self):
         status_df = self._get_pond_status_color_code(begin_date=self.run_date_start, end_date=self.run_date_end)
@@ -941,8 +1077,8 @@ class ChemicalUsageLoad(DBColumnsBase):
         'benzalkonium': {'uom': 'gal', 'cost': 49.07, 'data_column': 'Volume Benzalkonium Added', 'out_column': 'benzalkonium_cost'}
             }
     
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
     def run(self):
         calc_df = self._chemical_cost_calculations(start_date=self.run_date_start, end_date=self.run_date_end) 
