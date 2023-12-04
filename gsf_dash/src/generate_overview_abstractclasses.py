@@ -30,8 +30,8 @@ class BaseReportProperties:
     def fontsizes(self) -> dict:
         return {'default': self.fontsize_base,
                 'small': self.fontsize_base * 0.75,
-                'medium': self.fontsize_base * 1.25,
-                'large': self.fontsize_base * 1.75,
+                'medium': self.fontsize_base * 1.125,
+                'large': self.fontsize_base * 1.25,
                 'title': self.fontsize_base * 1.75 } 
 
     @property
@@ -339,38 +339,56 @@ class ExpenseGridReport(BasePondsGridReport):
                 # left justify categories
                 data_ax.text(0.05, 0.9, f'MTD Expense:\nMTD Calc Harvested:\n\nYTD Expense:\nYTD Calc Harvested:', ha='left', va='top', multialignment='left', fontsize=self.fontsizes['small'])
                 # right justify data
-                data_ax.text(0.9, 0.9, f'${int(pond_mtd_expense):,}\n{f"{int(pond_mtd_harvested):,} kg" if pond_mtd_harvested >= 1 else "-  "}\n\n${int(pond_ytd_expense):,}\n{f"{int(pond_ytd_harvested):,} kg" if pond_ytd_harvested >= 1 else "-  "}', ha='right', va='top', ma='right', fontsize=self.fontsizes['small'])
+                mtd_expense_fmt = f'${int(pond_mtd_expense):,}' if pond_mtd_expense > 0 else '- '
+                mtd_harvested_fmt = f"{int(pond_mtd_harvested):,} kg" if pond_mtd_harvested >= 1 else "- "
+                ytd_expense_fmt = f'${int(pond_ytd_expense):,}' if pond_ytd_expense > 0 else '- '
+                ytd_harvested_fmt = f"{int(pond_ytd_harvested):,} kg" if pond_ytd_harvested >= 1 else "- "
+                data_ax.text(0.9, 0.9, f'{mtd_expense_fmt}\n{mtd_harvested_fmt}\n\n{ytd_expense_fmt}\n{ytd_harvested_fmt}', ha='right', va='top', ma='right', fontsize=self.fontsizes['small'])
                 
     def plot_annotations(self):
         # add note next to title regarding YTD start
         self.fig.text(0.7, 0.95, f'YTD Period Beginning: {self.ytd_start.strftime("%B %Y")}', ha='left', va='top', fontsize=self.fontsizes['default'])
+
+        # Query ytd co2 cost data
+        # (co2 cost cannot currently be split out per pond, so can only report an aggregate cost)
+        ytd_co2_cost_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='co2_usage', query_date_start=self.ytd_start, query_date_end=self.report_date, col_names=['total_co2_cost'])
+        mtd_co2_cost_data = ytd_co2_cost_data[ytd_co2_cost_data['Date'] >= self.mtd_start.strftime('%Y-%m-%d')]
+        
+        # show aggregate co2 costs
+        mtd_co2_cost = mtd_co2_cost_data['total_co2_cost'].sum()
+        ytd_co2_cost = ytd_co2_cost_data['total_co2_cost'].sum()
+        # left justify categories
+        self.fig.text(0.07, 0.17, f'MTD Total CO2 Cost:\nYTD Total CO2 Cost:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        # right justify data
+        self.fig.text(0.23, 0.17, f'${int(mtd_co2_cost):,}\n${int(ytd_co2_cost):,}', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
         
         # call sum(numeric_only=True) first to sum each numeric column, then call sum() again on the resulting series of column subtotals, to get the overall sum of expenses for entire farm
-        mtd_expense_total = self.mtd_expense_data.sum(numeric_only=True).sum()
-        ytd_expense_total = self.ytd_expense_data.sum(numeric_only=True).sum()
+        mtd_expense_total = self.mtd_expense_data.sum(numeric_only=True).sum() + mtd_co2_cost
+        ytd_expense_total = self.ytd_expense_data.sum(numeric_only=True).sum() + ytd_co2_cost
         # left justify categories
-        self.fig.text(0.07, 0.17, f'MTD Total Expenses:\nYTD Total Expenses:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        self.fig.text(0.07, 0.14, f'MTD Total Expenses:\nYTD Total Expenses:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
         # right justify data
-        self.fig.text(0.23, 0.17, f'${int(mtd_expense_total):,}\n${int(ytd_expense_total):,}', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+        self.fig.text(0.23, 0.14, f'${int(mtd_expense_total):,}\n${int(ytd_expense_total):,}', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
 
         # show aggregate estimated harvested totals
         mtd_harvested_total = self.mtd_harvest_data.sum(numeric_only=True).sum()
         ytd_harvested_total = self.ytd_harvest_data.sum(numeric_only=True).sum()
         # left justify categories
-        self.fig.text(0.33, 0.17, f'MTD Total *Calculated Harvested:\nYTD Total *Calculated Harvested:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        self.fig.text(0.33, 0.14, f'MTD Total *Calculated Harvested:\nYTD Total *Calculated Harvested:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
         # right justify data
-        self.fig.text(0.575, 0.17, f'{int(mtd_harvested_total):,} kg\n{int(ytd_harvested_total):,} kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
-        # add footnote regarding calculated mass
-        self.fig.text(0.07, 0.11, "*Calculated harvest mass is based on pond depth and density measurements taken on day of harvest and the next available day", ha='left', va='top')
+        self.fig.text(0.575, 0.14, f'{int(mtd_harvested_total):,} kg\n{int(ytd_harvested_total):,} kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
         
-        # show aggregate estimated harvested totals
-        mtd_cost_per_kg = self.mtd_harvest_data.sum(numeric_only=True).sum()
-        ytd_cost_per_kg = self.ytd_harvest_data.sum(numeric_only=True).sum()
+        # show aggregate costs per kg
         # left justify categories
-        self.fig.text(0.67, 0.17, f'MTD Avg $/kg:\nYTD Avg $/kg:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
+        self.fig.text(0.67, 0.14, f'MTD Avg $/kg:\nYTD Avg $/kg:', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
         # right justify data
-        self.fig.text(0.85, 0.17, f'${mtd_expense_total/mtd_harvested_total:,.2f}\n${ytd_expense_total/ytd_harvested_total:,.2f}', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
+        mtd_avg_cost = f'${mtd_expense_total/mtd_harvested_total:.2f} /kg' if mtd_harvested_total > 0 else '-   '
+        ytd_avg_cost = f'${ytd_expense_total/ytd_harvested_total:.2f} /kg' if ytd_harvested_total > 0 else '-   '
+        self.fig.text(0.79, 0.14, f'{mtd_avg_cost}\n{ytd_avg_cost}', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
 
+        # add footnote regarding calculated mass
+        self.fig.text(0.07, 0.11, "*Calculated harvest mass is based on pond 'depth', 'density', and '% nanno' measurements to estimate change in mass between the day of harvest the next day with available data", ha='left', va='top', fontsize=self.fontsizes['small'])
+        
         # show ytd mass breakout by harvest and splits
         # ytd_harvest_harvested = self.ytd_harvest_data.loc[:,'est_harvested'].sum()
         # ytd_harvest_split = self.ytd_harvest_data.loc[:, 'est_split'].sum()

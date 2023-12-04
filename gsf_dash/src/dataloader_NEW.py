@@ -83,7 +83,7 @@ class Dataloader:
             init_db_table(self.db_engine, 'ponds_data_calculated') 
             init_db_table(self.db_engine, 'ponds_data_expenses') 
             init_db_table(self.db_engine, 'epa_data') 
-            init_db_table(self.db_engine, 'agg_daily')
+            init_db_table(self.db_engine, 'co2_usage')
 
         # use decorator from .utils.py to redirect stdout to a log file, only while building the DB
         @redirect_logging_to_file(log_file_directory=Path(f'db/logs/'), 
@@ -415,23 +415,22 @@ class ScorecardDataLoad(DBColumnsBase):
         out_df = out_df[out_df['Date'].between(begin_date, end_date)]
         return out_df
 
-class CO2ConsumptionLoad(DBColumnsBase):
+class CO2UsageLoad(DBColumnsBase):
     '''
-    Load co2 consumption data into 'agg_daily' table
+    Load co2 consumption data into 'co2_usage' table
     '''
-    OUT_TABLE_NAME = 'agg_daily'
+    OUT_TABLE_NAME = 'co2_usage'
     
     def __init__(self, *args, **kwargs):
         # init as base class 
         super().__init__(*args, **kwargs) 
 
     def run(self):
-        if not hasattr(self, '_co2_data'):
-            CO2ConsumptionLoad._co2_data = self._load_data_file()
+        # load data
+        co2_df = self._load_data_file()
 
-        # get copy of df from class attr and filter dates
-        co2_df = self._co2_data.copy()
-        co2_df = co2_df[co2_df['Date'].between(self.run_date_start, self.run_date_end)]
+        # calculate cost per day
+        co2_df = self._calc_co2_cost(co2_df)
         
         # update the db 
         update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=co2_df, pk_cols=['Date'])
@@ -440,10 +439,20 @@ class CO2ConsumptionLoad(DBColumnsBase):
         print('Loading co2 consumption file...')
         file_id = load_setting('file_ids').get('co2_consumption')
         co2_df = M365ExcelFileHandler(file_object_id=file_id, load_data=True, data_get_method='DL', ignore_sheets=['2017', 'Troubleshooting'], concat_sheets=True).concat_df
+
+        # filter to date range provided to init Class
+        co2_df = co2_df[co2_df['Date'].between(self.run_date_start, self.run_date_end)]
+        
         # filter columns to just Date and Daily Consumption (lbs)
         co2_df = co2_df[['Date', 'Daily Consumption (lbs)']].dropna()
-        co2_df = co2_df.rename(columns={'Daily Consumption (lbs)': 'total_co2_consumption'})
+        co2_df = co2_df.rename(columns={'Daily Consumption (lbs)': 'total_co2_usage'})
+       
         return co2_df  
+
+    def _calc_co2_cost(self, co2_consumption_df) -> pd.DataFrame:
+        co2_cost_per_lb = 0.15 # co2 cost / lb ... need a lookup table at some point to handle variation
+        co2_consumption_df['total_co2_cost'] = co2_consumption_df['total_co2_usage'] * co2_cost_per_lb
+        return co2_consumption_df
         
 class EPALoad(DBColumnsBase):
     OUT_TABLE_NAME = 'epa_data'
@@ -942,7 +951,6 @@ class CalcAggMassGrowth(DBColumnsBase):
         # # update the db (calling a function from .db_utils.py)
         # update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=growth_df)
         calc_df.to_excel('test_agg_growth_output.xlsx')
-        
 
 class CalcHarvestedSplit(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
@@ -1070,7 +1078,6 @@ class ChemicalUsageLoad(DBColumnsBase):
         'uan-32': {'uom': 'gal', 'cost': 2.08, 'data_column': 'Volume UAN-32 Added', 'out_column': 'uan32_cost'},
         'fertilizer-10-34': {'uom': 'gal', 'cost': 4.25, 'data_column': 'Volume 10-34 Added', 'out_column': 'fert1034_cost'},
         'bleach': {'uom': 'gal', 'cost': 3.15, 'data_column': 'Volume Bleach Added', 'out_column': 'bleach_cost'},
-        #'co2': {'uom': 'lb', 'cost': 0.15, 'data_column': '', 'out_column': 'co2_cost'},  DON'T YET HAVE A METHOD OF SPLITTING CO2 COSTS PER POND / IMPLEMENT LATER
         'trace': {'uom': 'gal', 'cost': 0.41, 'data_column': 'Volume Trace Added', 'out_column': 'trace_cost'},
         'iron': {'uom': 'gal', 'cost': 0.60, 'data_column': 'Volume Iron Added', 'out_column': 'iron_cost'},
         'cal-hypo': {'uom': 'kg', 'cost': 3.17, 'data_column': 'kg Cal Hypo Added', 'out_column': 'cal_hypo_cost'},
