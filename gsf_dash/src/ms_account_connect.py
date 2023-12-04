@@ -151,7 +151,7 @@ class MSAccount(object):
                 pass
         # send error message and return None if file wasn't found in any of the site_libs
         print(error_msg := f'ERROR: failed to get sharepoint object with ID: {object_id}')
-        self._account.send_email(recipients=self._account.failure_email_info['recipients'],
+        self.send_email(recipients=self.failure_email_info['recipients'],
                                              subject='FAILURE: loading sharepoint file', 
                                              msg_body=error_msg) 
         return None
