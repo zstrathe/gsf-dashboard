@@ -150,7 +150,7 @@ def query_data_table_by_date(db_name_or_engine: str|sqlalchemy.Engine, table_nam
         out_df = convert_df_Date_col(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
         return out_df
 
-def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None, raise_exception_on_error: bool =True, check_safe_date: bool = False) -> pd.DataFrame:
+def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None, raise_exception_on_error: bool = True, check_safe_date: bool = False) -> pd.DataFrame:
     '''
     Helper function to query data from a database table for a specified date
 
@@ -179,16 +179,26 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
     query_date_end_dt = query_date_end
     query_date_start = query_date_start.strftime("%Y-%m-%d")
     query_date_end = query_date_end.strftime("%Y-%m-%d")
-
-    if col_names:
-        # add Date and PondID to col_names so that they are returned in the query (if any col names are provided at all - all columns are returned if not, so no need to append these)
-        col_names.insert(0,'PondID')
-        col_names.insert(0,'Date')
     
     if not check_if_table_exists(db_engine, table_name):
         print(f'ERROR: Could not load {table_name} from database: {db_name_or_engine}!')
     else:
         table_obj = load_table(db_engine, table_name)
+
+        # check if PondID column exists in table, if so, add to query output columns
+        pond_id_flag = False
+        for col in table_obj.columns:
+            if '.PondID' in str(col):
+                pond_id_flag = True
+                break
+        
+        # since 'Date' and 'PondID' (if in table) columns do not need to be specified in params, add them to the col_names parameter 
+        # if the col_names parameter is None (default), then all columns in the table are returned, so no need to append these
+        if col_names != None:
+            if pond_id_flag:
+                col_names.insert(0,'PondID')
+            col_names.insert(0,'Date')
+  
         with db_engine.begin() as conn:
             
             # when check_safe_date = True, get date from first row of db table, and if query_date_start is earlier than that date, then set query_date_start to the first row date

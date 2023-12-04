@@ -72,6 +72,7 @@ def main(argv):
         failure_notify_email_exit(f'Error running pond overview script', tb)
 
     # TEMPORARY INTEGRATION OF NEW PLOT OF EXPENSES USING MORE MODULAR CLASS METHODS
+    # CURRENTLY ONLY "EXPENSE REPORT" IS RUNNING FROM THIS, PLAN TO INTEGRATE OTHER REPORTS 
     try:
         from src.generate_overview_abstractclasses import ExpenseGridReport
         output_filenames.insert(1, ExpenseGridReport(report_date=date_dt).run())
