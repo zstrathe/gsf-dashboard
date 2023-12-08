@@ -51,7 +51,7 @@ class Dataloader:
                 reset_queue_flag = False
                 for c in dep_classes:
                     if not c in completed_etl_name_list:
-                        print('Detected dependency class needed, re-appending to end of processing queue!')
+                        print(f'Detected dependency class needed, cannot run: {data_etl_class_obj.__name__}. Re-appending to end of processing queue!')
                         reset_queue_counter[data_etl_class_obj.__name__] += 1
                         if reset_queue_counter[data_etl_class_obj.__name__] > 1:
                             raise Exception(f'ERROR: could not run process name: [{data_etl_class_obj.__name__}] for run date: [{run_date.strftime("%Y-%m-%d")}], due to dependency process: [{c}] not existing??')
@@ -60,7 +60,7 @@ class Dataloader:
                         break
                 if reset_queue_flag:
                     continue
-            print('Running:', data_etl_class_obj.__name__) 
+            print('\n*** Running:', data_etl_class_obj.__name__, '***') 
             data_etl_class_obj(**param_kwargs)
             completed_etl_name_list.append(data_etl_class_obj.__name__)
        
@@ -79,11 +79,13 @@ class Dataloader:
         # initialize database tables from CREATE TABLE statements stored in ./settings/db_schemas/
         # could just let pd.to_sql() create the tables, but this allows additional flexibility with setting contstraints, etc.
         def init_tables():
+            ## TODO: just iterate through '.create_table' files
             init_db_table(self.db_engine, 'ponds_data') 
             init_db_table(self.db_engine, 'ponds_data_calculated') 
             init_db_table(self.db_engine, 'ponds_data_expenses') 
             init_db_table(self.db_engine, 'epa_data') 
             init_db_table(self.db_engine, 'co2_usage')
+            init_db_table(self.db_engine, 'daily_weather_data')
 
         # use decorator from .utils.py to redirect stdout to a log file, only while building the DB
         @redirect_logging_to_file(log_file_directory=Path(f'db/logs/'), 
@@ -456,14 +458,14 @@ class CO2UsageLoad(DBColumnsBase):
         
 class EPALoad(DBColumnsBase):
     OUT_TABLE_NAME = 'epa_data'
-    OUT_COLUMNS = ['epa_val', 'epa_val_total_fa', 'epa_actual_measurement']
+    OUT_COLUMNS = ['epa_val', 'epa_val_total_fa', 'measurement_date_actual', 'epa_actual_measurement'] # keep track of columns to output? not using anywhere else yet...
     DEPENDENCY_CLASSES = ['GetActiveStatus'] # define class dependency that needs to be run prior to an instance of this class
     MIN_LOOKBACK_DAYS = 15 # override default daily update lookback days (from 5 to 15)
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
     def run(self):
-        ## TODO: check if there's data available from M365 api to check if file has been updated?? then just store local file and re-download when necessary??
+        ## TODO: use data available from M365 api to check if file has been updated, then just store local file and re-download when necessary
         if not hasattr(self, '_epa_df'):
             EPALoad._epa_df = self._download_and_merge_epa_data()
         epa_df = self._epa_df.copy()
@@ -489,7 +491,8 @@ class EPALoad(DBColumnsBase):
         # group by Date and PondID to get averaged EPA values (when more than one value exists for a pond/date), then reset_index() to reset grouping back to a normal df
         merged_epa_df = merged_epa_df.groupby(by=['Date', 'PondID']).mean().reset_index().sort_values(by=['Date', 'PondID'])
 
-        merged_epa_df['epa_actual_measurement'] = 'X' # add a column to keep track of "actual" epa_values (days when measured) versus days in-betweeen measurements that are filled in
+        merged_epa_df['epa_actual_measurement'] = True # add a column to keep track of "actual" epa_values (days when measured) versus days in-betweeen measurements that are filled in
+        merged_epa_df['measurement_date_actual'] = merged_epa_df['Date'] # setup column to forward fill date, so that row with filled data will have a reference to the date of the actual measurement
 
         # construct a DF with combination of all possible Date and PondID columns for date range according to earliest and latest dates for EPA data
         epa_date_range = pd.date_range(start=merged_epa_df['Date'].min(), end=self.run_date_end)
@@ -511,6 +514,10 @@ class EPALoad(DBColumnsBase):
                                                                 col_names=['active_status'],
                                                                 check_safe_date=True) # Date and PondID automatically included
 
+        # merge "active status" df with output df, and set all values, for "inactive" ponds, on columns that were forward filled, 
+        # to "n.a." temporarily, so that these rows don't get forward filled
+        # do this instead of just filtering on 'active_status' when forward filling, because these rows act as a block for forward filling
+        # i.e., one day a pond is active, then it is emptied with two days of inactivity, then restarted, the prior measurement wont carry forward after restarted
         out_df = pd.merge(out_df, active_pond_dates_df, on=['Date', 'PondID'], how='left')
         out_df.loc[out_df['active_status'] == False, fill_columns] = 'n.a.'
         
@@ -521,8 +528,16 @@ class EPALoad(DBColumnsBase):
             tmp_pond_id_df[fill_columns] = tmp_pond_id_df[fill_columns].ffill()
             out_df.loc[out_df['PondID'] == pond_id, fill_columns] = tmp_pond_id_df[fill_columns]
 
+        # replace the temporary 'inactive' blocks used to stop forward filling for periods of inactivity with Null values
         out_df = out_df.replace('n.a.', None)
+
+        # drop the 'active_status' column as it should not be included in output
         out_df = out_df.drop('active_status', axis=1)
+
+        # set 'measurement_date_actual' as datetime to ensure that pd.dtypes recognizes it as datetime
+        # this is necessary because the database update function will convert the column to string format to store it
+        # but it will not work if the col dtype isn't datetime (col name including substring "date" is also required)
+        out_df['measurement_date_actual'] = pd.to_datetime(out_df['measurement_date_actual'])
         
         return out_df
 
@@ -1113,7 +1128,32 @@ class ChemicalUsageLoad(DBColumnsBase):
         calc_df = calc_df.loc[:, out_cols] # filter df to only the output columns
         return calc_df
 
+class WeatherDataLoad(DBColumnsBase):
+    OUT_TABLE_NAME = 'daily_weather_data'
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         
+    def run(self):
+        weather_df = self._get_weather_data(start_date=self.run_date_start, end_date=self.run_date_end) 
+        
+        # update the db (calling a function from .db_utils.py)
+        update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=weather_df, pk_cols=['Date'])
+
+    def _get_weather_data(self, start_date, end_date):
+        from meteostat import Daily, Point, units
+
+        # use meteostat.Point() to get weather data for geo location
+        # this largely uses data for Deming NM airport weather station: "KDMN0" ... plus modeled data
+        point = Point(31.7947,-107.7857, alt=1239) 
+        point.radius = 80000 # roughly 50 mile radius in meters (default for meteostat is 35000 meters- approx 22 miles)
+
+        # Get daily data
+        data = Daily(loc=point, start=start_date, end=end_date).convert(units.imperial).fetch()
+        data = data.reset_index().rename(columns={'time':'Date'})
+        data = data[['Date', 'tavg', 'tmin', 'tmax', 'prcp', 'wspd', 'pres']]
+        return data
+
 ############# TODO: update growth calculation with method using db
 #         def calculate_growth(pond_data_df, run_date, num_days, remove_outliers, data_count_threshold=2, weighted_stats_for_outliers=True):
 #             '''

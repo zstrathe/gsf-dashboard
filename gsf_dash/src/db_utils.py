@@ -67,16 +67,16 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
         print('No data, skipping DB update...')
         return False
     
-    # convert Date column in update dataframe to string (because using 
-    update_data_df = convert_df_Date_col(update_data_df, option='TO_STR')
+    # convert Date column in update dataframe to string
+    update_data_df = convert_df_date_cols(update_data_df, option='TO_STR')
 
     # create temp table in database to update the target table from
-    update_data_df.to_sql(name='temp_table', con=db_engine, if_exists='replace', index=False)
+    update_data_df.to_sql(name='__temp_table', con=db_engine, if_exists='replace', index=False)
     
     # construct a statement to first insert primary key pairs into the table if they don't already exist (ignore if they do exist using INSERT OR IGNORE for sqlite)
     pk_vals = ', '.join(['(' + ', '.join([f'"{i}"' for i in sublist]) + ')' for sublist in update_data_df[pk_cols].values.tolist()])
     '''
-    pk_vals formatted as string example: "('2023-09-01', '0401'), ('2023-09-02', '0401'), ... "
+    pk_vals formatted as string example for (Date, PondID): "('2023-09-01', '0401'), ('2023-09-02', '0401'), ... "
     '''
     sql_insert_keys_stmt = f'INSERT OR IGNORE INTO {db_table_name} ({", ".join(pk_cols) if len(pk_cols) > 1 else pk_cols[0]}) VALUES {pk_vals};'
     sql_insert_keys_stmt = sqlalchemy.text(sql_insert_keys_stmt)
@@ -90,9 +90,9 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
     # This works with Sqlite, but may need replaced if migrating to another database type
     update_col_names = [f'"{col_name}"' for col_name in update_data_df.columns if col_name not in pk_cols] # put quotes around column names so sql queries dont break for columns that include spaces in the name
     sql_update_stmt = (f'UPDATE {db_table_name} '
-                + f'SET ({", ".join([col_name for col_name in update_col_names])}) = ({", ".join([f"temp_table.{col_name}" for col_name in update_col_names])}) ' 
-                + 'FROM temp_table '
-                + f'WHERE {" AND ".join([f"temp_table.{key_col} = {db_table_name}.{key_col}" for key_col in pk_cols])};')
+                + f'SET ({", ".join([col_name for col_name in update_col_names])}) = ({", ".join([f"__temp_table.{col_name}" for col_name in update_col_names])}) ' 
+                + 'FROM __temp_table '
+                + f'WHERE {" AND ".join([f"__temp_table.{key_col} = {db_table_name}.{key_col}" for key_col in pk_cols])};')
     sql_update_stmt = sqlalchemy.text(sql_update_stmt)
     
     # execute sql statement
@@ -147,7 +147,7 @@ def query_data_table_by_date(db_name_or_engine: str|sqlalchemy.Engine, table_nam
             else:
                 output = conn.execute(sqlalchemy.select(table_obj).where(table_obj.c["Date"] == query_date)).fetchall()
         out_df = pd.DataFrame(output, columns=col_names)
-        out_df = convert_df_Date_col(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
+        out_df = convert_df_date_cols(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
         return out_df
 
 def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, table_name: str, query_date_start: datetime, query_date_end: datetime, col_names: list | None = None, raise_exception_on_error: bool = True, check_safe_date: bool = False) -> pd.DataFrame:
@@ -226,10 +226,10 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
                     # return empty df (with col_names specified plus "Date" and "PondID") if query resulted in no data and raise_exception_on_error = False
                     return pd.DataFrame(columns=col_names)
         out_df = pd.DataFrame(output, columns=col_names)
-        out_df = convert_df_Date_col(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
+        out_df = convert_df_date_cols(out_df, option='TO_DT') # convert the Date column from string (db representation) into datetime format
         return out_df
 
-def convert_df_Date_col(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.DataFrame:
+def convert_df_date_cols(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.DataFrame:
     '''
     Helper function to convert the Date column in a pandas dataframe
 
@@ -240,22 +240,26 @@ def convert_df_Date_col(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.Data
 
     It would be easier to just use a db that can handle datetime values...
     '''
-    # update "Date" column in df
-    if "Date" in df.columns:
-        date_dtype_is_datetime = is_datetime64_any_dtype(df.dtypes["Date"])
+    for col_name in df.columns:
+        ### TODO: use regex to find 'date', not surrounded by any other alphabetic characers (so not just part of another word)
+        if 'date' in col_name.lower():
+            # when converting datetime to string
+            # for inputting data into DB
+            if option == 'TO_STR':
+                # to ensure that all datetime columns are properly converted, check if each col is of 'datetime64' type
+                if is_datetime64_any_dtype(df.dtypes[col_name]):
+                    df[col_name] = df[col_name].dt.strftime(dt_format)
+                else:
+                    raise Exception(f"ERROR: tried to convert {col_name} from datetime to string, but it is not in datetime format!\n('date' substring in column name will cause automatic conversion attempt')")
+            
+            # when converting string to datetime
+            # for extracting date from db (stored as strings)
+            elif option == 'TO_DT':
+                df[col_name] = pd.to_datetime(df[col_name], errors='coerce')
+
+            else:
+                raise Exception('ERROR: no datetime conversion "option" parameter specified!')
         
-        if option == 'TO_STR':
-            if date_dtype_is_datetime:
-                df['Date'] = df['Date'].apply(lambda x: x.strftime(dt_format))
-            else:
-                print('Date value is already a string, doing nothing...')
-        elif option == 'TO_DT':
-            if date_dtype_is_datetime:
-                print('Date value is already datetime, doing nothing...')
-            else:
-                df['Date'] = df['Date'].apply(lambda x: datetime.strptime(x, dt_format))
-    else:
-        print('Could not convert Date column, did not find in DF provided!')
     return df
         
 

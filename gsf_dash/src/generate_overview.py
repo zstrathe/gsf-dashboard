@@ -11,13 +11,13 @@ from . import generate_multipage_pdf
 from .db_utils import query_data_table_by_date_range
 
 class PondsOverviewPlots:
-    def __init__(self, select_date, scorecard_dataframe, processing_dataframe, epa_data_dict, active_dict, run=True, save_output=True):
+    def __init__(self, select_date, scorecard_dataframe, processing_dataframe, active_dict, run=True, save_output=True): #  epa_data_dict
         self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
         self.scorecard_dataframe = scorecard_dataframe
         self.processing_dataframe = processing_dataframe
         self.active_dict = active_dict
         self.save_output = save_output
-        self.epa_data_dict = epa_data_dict
+       # self.epa_data_dict = epa_data_dict
         self.potential_harvests_dict = None # initialize potential_harvests_dict, will be populated by self.plot_scorecard()
         if run:
             self.output_filenames = [] # initialize a list to collect output filenames
@@ -374,18 +374,11 @@ class PondsOverviewPlots:
                     num_active_ponds_sm += 1
                 num_active_ponds += 1
 
-                # get most recent EPA value
-                epa_val = epa_df[(epa_df['PondID'] == pond_name) & (epa_df['Date'] == self.select_date)]['epa_val'].iloc[0].item()
-                
+                # get most recent EPA value and measurement date
+                epa_val, epa_date = epa_df[(epa_df['PondID'] == pond_name) & (epa_df['Date'] == self.select_date)].iloc[0].loc[['epa_val', 'measurement_date_actual']]
                 if pd.isna(epa_val):
-                    epa_val = None
-                    epa_date = None
-                else:
-                    epa_dates_df = epa_df[(epa_df['PondID'] == pond_name) & (~pd.isna(epa_df['epa_actual_measurement']))]
-                    if epa_dates_df.empty:
-                        epa_date = None
-                    else:
-                        epa_date = epa_dates_df['Date'].iloc[-1]
+                     epa_val = None
+                     epa_date = None
                 
                 # get dataframe for individual pond for current date
                 date_single_pond_data = single_pond_data.loc[select_date] 
@@ -623,7 +616,7 @@ class PondsOverviewPlots:
         ##############################
 
         # query epa data from db table
-        epa_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', table_name='epa_data', query_date_start=self.select_date-pd.Timedelta(days=20), query_date_end=self.select_date, col_names=['epa_val', 'epa_actual_measurement'])
+        epa_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', table_name='epa_data', query_date_start=self.select_date-pd.Timedelta(days=20), query_date_end=self.select_date, col_names=['epa_val', 'measurement_date_actual'])
         
         n_rows_small = 12
         n_rows_large = 10
@@ -679,15 +672,86 @@ class PondsOverviewPlots:
                 ax = plt.Subplot(fig, pond_plot)
                 ax.axis('off')
                 if 'BLANK 11-6' in pond_name: # plot the color key in the first blank subplot in row 11
+                    status_code_mass_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+                                                                     table_name='ponds_data_calculated', 
+                                                                     query_date_start=select_date, 
+                                                                     query_date_end=select_date, 
+                                                                     col_names=['status_code', 'calc_mass_nanno_corrected'])
+                 
+                    total_mass_by_code = status_code_mass_df.groupby(by='status_code').agg(pond_count=('status_code', 'count'), calc_mass_nanno_corrected=('calc_mass_nanno_corrected', 'sum')).reset_index()
+                  
+                    for code in [0,1,2,3,4,5,6]:
+                        if code not in total_mass_by_code['status_code'].values:
+                            total_mass_by_code = total_mass_by_code.append({'status_code': code, 'pond_count': 0, 'calc_mass_nanno_corrected': 0}, ignore_index=True)
+                   
+                    total_mass_by_code = total_mass_by_code.set_index('status_code').to_dict(orient='index')
+                    
+                    for code, vals_dict in total_mass_by_code.copy().items():
+                        pond_count, calc_mass = vals_dict.values()
+                        total_mass_by_code[code]['pond_count'] = pond_count if pond_count != None and pond_count > 0 else "-"
+                        total_mass_by_code[code]['calc_mass_nanno_corrected'] = f'{calc_mass:,.0f} kg' if calc_mass != None and calc_mass > 0 else "-"
+                    
+                    '''
+                    status codes: from DB
+                        - 0: inactive pond 
+                        - 1: grey: incomplete data (either 'afdw' or 'epa_val' are missing)
+                        - 2: red: afdw less than 0.25
+                        - 3: brown: afdw >= 0.25; epa_val < 2.5%
+                        - 4: yellow: (afdw >= 0.25 and afdw < 0.50) OR (epa_val >=2.5% and epa_val < 3%)
+                        - 5: light green: afdw >= 0.50 and < 0.80; epa_val > 3%
+                        - 6: dark green: afdw >= 0.80; epa_val > 3%
+                        - ERROR: should not happen, possible bug in code / missing conditions / etc
 
-                    legend_data = [{'labels':{'Color key': {'align': '1-l', 'weight': 'bold'}}},
-                                   {'labels':{'AFDW': {'align': '1-c', 'weight': 'underline'}, 'EPA %': {'align': '3-c', 'weight': 'underline'}}},
-                                   {'labels':{r'$<$ 0.25': {'align': '1-r'}, 'and':{'align':'2'}, 'any': {'align': '3-r'}}, 'fill_color': 'red'},
-                                   {'labels':{r'$\geq$ 0.25': {'align': '1-r'}, 'and': {'align': '2'}, r'$<$ 2.5%': {'align': '3-r'}, 'out of spec EPA but AFDW OK': {'align': '4-l', 'excl_color':'Y'}}, 'fill_color': 'tan'},
-                                   {'labels':{'0.25 - 0.49': {'align': '1-r'}, 'or': {'align': '2'}, '2.5% - 2.99%': {'align': '3-r'}}, 'fill_color': 'yellow'},
-                                   {'labels':{'0.50 - 0.79': {'align': '1-r'}, 'and': {'align': '2'}, r'$\geq$ 3.0%': {'align': '3-r'}}, 'fill_color': 'mediumspringgreen'},
-                                   {'labels':{r'$\geq$ 0.80': {'align': '1-r'}, 'and': {'align': '2'}, r'$\geq$ 3.0%': {'align': '3-r'}}, 'fill_color': 'tab:green'},
-                                   {'labels':{'Incomplete data': {'align': '2'}},'fill_color': 'lightgrey'}
+                    '''
+                    
+                    legend_data = [{'labels':
+                                        {'Color key': {'align': '1-l', 'weight': 'bold'}}},
+                                   {'labels':
+                                        {'AFDW': {'align': '1-c', 'weight': 'underline'}, 
+                                         'EPA %': {'align': '3-c', 'weight': 'underline'}, 
+                                         'Count of Ponds': {'align': '4-c', 'weight': 'underline'},
+                                         'Calc Nanno Mass': {'align': '5-c', 'weight': 'underline'}}},
+                                   {'labels':
+                                        {r'$<$ 0.25': {'align': '1-r'}, 
+                                         'and': {'align': '2'}, 
+                                         'any': {'align': '3-r'},
+                                         total_mass_by_code.get(2).get('pond_count'): {'align': '4-c', 'excl_color': 'Y'},
+                                         total_mass_by_code.get(2).get("calc_mass_nanno_corrected"): {'align': '5-c', 'excl_color': 'Y'}}, 
+                                    'fill_color': 'red'},
+                                   {'labels':
+                                        {r'$\geq$ 0.25': {'align': '1-r'}, 
+                                         'and': {'align': '2'}, 
+                                         r'$<$ 2.5%': {'align': '3-r'}, 
+                                         #'out of spec EPA but AFDW OK': {'align': '4-l', 'excl_color':'Y'}
+                                         total_mass_by_code.get(3).get('pond_count'): {'align': '4-c', 'excl_color': 'Y'},
+                                         total_mass_by_code.get(3).get("calc_mass_nanno_corrected"): {'align': '5-c', 'excl_color': 'Y'}}, 
+                                    'fill_color': 'tan'},
+                                   {'labels':
+                                        {'0.25 - 0.49': {'align': '1-r'}, 
+                                         'or': {'align': '2'}, 
+                                         '2.5% - 2.99%': {'align': '3-r'},
+                                         total_mass_by_code.get(4).get('pond_count'): {'align': '4-c', 'excl_color': 'Y'},
+                                         total_mass_by_code.get(4).get("calc_mass_nanno_corrected"): {'align': '5-c', 'excl_color': 'Y'}}, 
+                                    'fill_color': 'yellow'},
+                                   {'labels':
+                                        {'0.50 - 0.79': {'align': '1-r'}, 
+                                         'and': {'align': '2'}, 
+                                         r'$\geq$ 3.0%': {'align': '3-r'},
+                                         total_mass_by_code.get(5).get('pond_count'): {'align': '4-c', 'excl_color': 'Y'},
+                                         total_mass_by_code.get(5).get("calc_mass_nanno_corrected"): {'align': '5-c', 'excl_color': 'Y'}}, 
+                                    'fill_color': 'mediumspringgreen'},
+                                   {'labels':
+                                        {r'$\geq$ 0.80': {'align': '1-r'}, 
+                                         'and': {'align': '2'}, 
+                                         r'$\geq$ 3.0%': {'align': '3-r'},
+                                         total_mass_by_code.get(6).get('pond_count'): {'align': '4-c', 'excl_color': 'Y'},
+                                         total_mass_by_code.get(6).get("calc_mass_nanno_corrected"): {'align': '5-c', 'excl_color': 'Y'}}, 
+                                    'fill_color': 'tab:green'},
+                                   {'labels':
+                                        {'Incomplete data': {'align': '2'},
+                                         total_mass_by_code.get(1).get('pond_count'): {'align': '4-c', 'excl_color': 'Y'},
+                                         total_mass_by_code.get(1).get("calc_mass_nanno_corrected"): {'align': '5-c', 'excl_color': 'Y'}},
+                                    'fill_color': 'lightgrey'}
                                   ]
                     x_align = {'1-l': [0.1, 'left'], 
                                '1-c': [0.23, 'center'],
@@ -696,7 +760,8 @@ class PondsOverviewPlots:
                                '3-c': [0.75, 'center'],
                                '3-r': [0.9, 'right'],
                                '4-l': [0.94, 'left'],
-                               '4-c': [1.05, 'center']}
+                               '4-c': [1.13, 'center'],
+                               '5-c': [1.55, 'center']}
                                                                                                                                                                                                                         
                     self.plot_legend(fig, ax, legend_data, x_align, y_spacing=0.12)
                     

@@ -23,15 +23,16 @@ class Dataloader:
             scorecard_datafile = self.download_data('scorecard_data_info')
             scorecard_dataframe = self.load_scorecard_data(scorecard_datafile)
             
-            epa_datafile1 = self.download_data('epa_data_info1')
-            epa_datafile2 = self.download_data('epa_data_info2')
-            epa_data_dict = self.load_epa_data([epa_datafile1, epa_datafile2])
+            # epa_datafile1 = self.download_data('epa_data_info1')
+            # epa_datafile2 = self.download_data('epa_data_info2')
+            # epa_data_dict = self.load_epa_data([epa_datafile1, epa_datafile2])
             
-            self.epa_dict = epa_data_dict
+            # self.epa_dict = epa_data_dict
+            
             active_dict = self.generate_active_dict(scorecard_dataframe, num_days_prior=5)
             processing_datafile = self.download_data('processing_data_info')
             processing_dataframe = self.load_processing_data(processing_datafile)
-            self.outdata = {'scorecard_dataframe': scorecard_dataframe, 'epa_data_dict': epa_data_dict, 'active_dict': active_dict, 'processing_dataframe': processing_dataframe}
+            self.outdata = {'scorecard_dataframe': scorecard_dataframe, 'active_dict': active_dict, 'processing_dataframe': processing_dataframe} # 'epa_data_dict': epa_data_dict,
     
     def download_data(self, data_item_setting):
         sharepoint_site, file_url, download_path, expected_min_filesize, print_label = load_setting(data_item_setting).values()
