@@ -38,7 +38,7 @@ class Dataloader:
                         'run_date_end': run_date_end}
 
         # init queue of subclasses of DBColumnsBase, which should all be ETL processes to extract & load data for one or more columns in the DB
-        # TODO: currently each process calls a method to update the corresponding rows in the DB table specified, need to collect data (by table) from each process and minimize DB update calls???
+        # MAYBE TODO: currently each process calls a method to update the corresponding rows in the DB table specified, need to collect data (by table) from each process and minimize DB update calls???
         data_etl_queue = DBColumnsBase.__subclasses__()
         completed_etl_name_list = [] # init empty list to store string names of classes successfully run
         reset_queue_counter = {p.__name__: 0 for p in data_etl_queue} # init a dict to count how many times a specific process cannot be run due to a dependency (raise Exception if > 1)
@@ -79,14 +79,10 @@ class Dataloader:
         # initialize database tables from CREATE TABLE statements stored in ./settings/db_schemas/
         # could just let pd.to_sql() create the tables, but this allows additional flexibility with setting contstraints, etc.
         def init_tables():
-            ## TODO: just iterate through '.create_table' files
-            init_db_table(self.db_engine, 'ponds_data') 
-            init_db_table(self.db_engine, 'ponds_data_calculated') 
-            init_db_table(self.db_engine, 'ponds_data_expenses') 
-            init_db_table(self.db_engine, 'epa_data') 
-            init_db_table(self.db_engine, 'co2_usage')
-            init_db_table(self.db_engine, 'daily_weather_data')
-
+            db_schema_files = [f.name.split('.')[0] for f in Path().glob("settings/db_schemas/*.create_table")]
+            for table_name in db_schema_files:
+                init_db_table(self.db_engine, table_name)
+       
         # use decorator from .utils.py to redirect stdout to a log file, only while building the DB
         @redirect_logging_to_file(log_file_directory=Path(f'db/logs/'), 
                                             log_file_name=f'{date.today().strftime("%y%m%d")}_rebuild_db_{self.db_engine_name}_{start_date.strftime("%y%m%d")}_{end_date.strftime("%y%m%d")}.log')
@@ -824,21 +820,44 @@ class MassVolumeHarvestableCalculations(DBColumnsBase):
 
         return calcs_df
 
-class CalcMassGrowth(DBColumnsBase):
+class CalcMassGrowthPerPond(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
-    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus'] # define class dependency that needs to be run prior to an instance of this class
-    MIN_LOOKBACK_DAYS = 7
+    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus', 'CalcHarvestedSplit'] # define class dependency that needs to be run prior to an instance of this class
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
     def run(self):
-        pass
-           
-    def _calc_growth(self, start_date, end_date):
+        growth_df = self._calc_growth(self.run_date_start, self.run_date_end)
+      
+        # update the db (calling a function from .db_utils.py)
+        update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=growth_df)
+    
+    def _calc_growth(self, start_date, end_date) -> pd.DataFrame:
+        '''
+        minimum date range is 14 days of data to calc growth:
+            - week-to-week growth: 7 days lookback
+            - daily rolling average: 7 days of week-to-week growth data
+        '''
+        # check if date range provided is at least 14, else override start_date param
+        _param_start_date = start_date
+        if (end_date - start_date).days < 14:
+            start_date = end_date - pd.Timedelta(days=14)
+  
         # query data to calculate 'liters' (from depth) 
         # and 'normalized liters' by converting liters with conversion factor (ratio of 'Filter AFDW' value compared to 0.50)
         ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Filter AFDW', 'Depth'])
+
+        # if either 'Filter AFDW' or 'Depth' value is missing for any date, then replace both with None
+        # because without both the row is not a good reference for measuring growth
+        def _none_if_afdw_or_depth_empty(row):
+            if (pd.isna(row['Filter AFDW']) or row['Filter AFDW'] == 0) or (pd.isna(row['Depth']) or row['Depth'] == 0):
+                return [None, None]
+            else:
+                return [row['Filter AFDW'], row['Depth']]
+        ref_df1[['Filter AFDW', 'Depth']] = ref_df1.apply(lambda row: _none_if_afdw_or_depth_empty(row), axis=1, result_type='expand')
+
+        # calc liters and 'normalized' liters (multiplied by a factor equal to afdw/0.50)
         inches_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
         ref_df1['liters'] = ref_df1['Depth'].apply(lambda depth_val: inches_to_liters * depth_val)
         ref_df1['afdw_norm_factor'] = ref_df1['Filter AFDW'] / 0.50
@@ -853,119 +872,141 @@ class CalcMassGrowth(DBColumnsBase):
         # set index as Date so that df.rolling() and df.shift() functions will work with days (to handle gaps in ponds being active)
         calc_df = calc_df.set_index('Date') 
         for pond_id in calc_df['PondID'].unique():
-            # first, set mask only on PondID field and backfill necessary data cols            
-            mask = (calc_df['PondID'] == pond_id) # (calc_df['active_status'] == True
-            calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5) # backfill calculated mass for missing days (weekends, etc)
-            calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']].dropna() # drop rows that are still N/A after backfill
+            # set mask only on PondID field and backfill necessary data cols            
+            mask = (calc_df['PondID'] == pond_id) 
+
+            # compute a column as a check to whether growth can be computed for any date
+            # this step is necessary in cases where a pond is emptied and "restarted" -> periods of 'inactive' status between periods of 'active' status
+            # so this column determines if there are 7 continuous prior days of a pond being in an 'active' status
+            def _check_growth_valid(row):
+                row_date_idx = row.name
+                date_check_range = pd.date_range(start=row_date_idx - pd.Timedelta(days=7), end=row_date_idx).to_pydatetime().tolist()
+                # if check range is outside the limits of the data, then return False
+                if not all([d in calc_df.loc[mask].index for d in date_check_range]):
+                    #print('some check dates missing in df, returning false')
+                    return False
+                chech_series = calc_df.loc[(calc_df['PondID'] == pond_id) & (calc_df.index.isin(date_check_range))]['active_status']
+                if False in chech_series.values:
+                    return False
+                else:
+                    return True
+            calc_df.loc[mask, '_growth_valid'] = calc_df.loc[mask, :].apply(lambda row: _check_growth_valid(row), axis=1)
+                
+            # backfill calculated mass for missing days (weekends, etc)
+            # .bfill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with backfilling so ensure that 5 day limit is applied
+            calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5) 
+
+            # update mask to include 'active' ponds only
+            # this is necessary because further steps perform row lookbacks, and need to ensure that data filled onto an inactive day isn't factored in
+            mask = (calc_df['PondID'] == pond_id) & (calc_df['active_status'] == True) 
             
-            # second, update mask to include 'active' ponds only
-            mask = (calc_df['PondID'] == pond_id) & (calc_df['active_status'] == True)
-            calc_df.loc[mask, :] = calc_df.loc[mask, :].fillna(0) # fill in n/a values for .rolling().sum() to calculate rolling sums (otherwise NaN values cause it to not work)
+            # get "harvest corrected (hc)" values for liters, normalized _liters, and calc_mass (next day val, if day has been noted as a harvest with a calculated harvest val > 0)
+            # per Kurt, this is so that variance in pond levels and density is factored out of growth calcs
+            def _get_harvest_corrected_val(row, col_name):
+                if not pd.isna(row['est_harvested']) and row['est_harvested'] > 0:
+                    rval_df = calc_df.loc[mask, col_name].shift(-1, freq='D')  
+                    if row.name in rval_df:
+                        return rval_df.loc[row.name]
+                    else:
+                        return None
+                else:
+                    return row[col_name]
+            calc_df.loc[mask, 'hc_liters'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'liters'), axis=1)
+            calc_df.loc[mask, 'hc_normalized_liters'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'normalized_liters'), axis=1)
+            calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'calc_mass_nanno_corrected'), axis=1)
+           
+            # fill in n/a values in 'est_harvested' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
+            calc_df.loc[mask, 'est_harvested'] = calc_df.loc[mask, 'est_harvested'].fillna(0) 
 
             # calculate rolling harvested amount for past 7-days
             # since the 'calc_mass_nanno_corrected' includes the harvested amount for the day when harvested, then shift this rolling window by
-            # 1 day and actually only get a 6-day rolling sum (this ensures that harvests are not being counted on the same day) 
-            calc_df.loc[mask, 'rolling_7_day_harvested_mass'] = calc_df.loc[mask, 'est_harvested'].shift(1).rolling('6d').sum()
+            # 1 day and actually only get a 6-day rolling sum (this ensures that harvests are not being double counted on the same day) 
+            calc_df.loc[mask, 'rolling_7d_harvested_mass'] = calc_df.loc[mask, 'est_harvested'].shift(1).rolling('6d').sum()
             
-            # get the 'liters', 'normalized liters', and 'calc_mass' from 7-days ago for ease of calculation
-            calc_df.loc[mask, 'liters_7_days_prev'] = calc_df.loc[mask, 'liters'].shift(7, freq='D')
-            calc_df.loc[mask, 'normalized_liters_7_days_prev'] = calc_df.loc[mask, 'normalized_liters'].shift(7, freq='D')
-            calc_df.loc[mask, 'mass_7_days_prev'] = calc_df.loc[mask, 'calc_mass_nanno_corrected'].shift(7, freq='D')
+            # get the 'liters', 'normalized liters' from 7-days ago, using "harvest corrected" columns
+            calc_df.loc[mask, 'growth_ref_prev_liters_7d'] = calc_df.loc[mask, 'hc_liters'].shift(7, freq='D')
+            calc_df.loc[mask, 'growth_ref_prev_norm_liters_7d'] = calc_df.loc[mask, 'hc_normalized_liters'].shift(7, freq='D')
+
+            # get 'calc_mass' from 7-days ago for mass change calculation, using 'harvest corrected' values
+            calc_df.loc[mask, 'mass_7d_prev'] = calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'].shift(7, freq='D')
             
             # calculate the net 7-day mass change in both kilograms and grams
-            calc_df.loc[mask, '7_day_mass_change_kg'] = (calc_df.loc[mask, 'rolling_7_day_harvested_mass'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7_days_prev'])
-            calc_df.loc[mask, '7_day_mass_change_grams'] = calc_df.loc[mask, '7_day_mass_change_kg']*1000
+            calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = (calc_df.loc[mask, 'rolling_7d_harvested_mass'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7d_prev'])
+            calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'] = calc_df.loc[mask, 'growth_ref_mass_change_kg_7d']*1000
             
             # calculate growth
-            calc_df.loc[mask, '7d_growth'] = calc_df.loc[mask, '7_day_mass_change_grams'] / calc_df.loc[mask, 'liters_7_days_prev']
-            calc_df.loc[mask, '7d_normalized_growth'] = calc_df.loc[mask, '7_day_mass_change_grams'] / calc_df.loc[mask, 'normalized_liters_7_days_prev']
+            calc_df.loc[mask, '7d_growth'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'] / calc_df.loc[mask, 'growth_ref_prev_liters_7d']
+            calc_df.loc[mask, '7d_normalized_growth'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'] / calc_df.loc[mask, 'growth_ref_prev_norm_liters_7d']
+
+            # clear out the rows where growth cannot be valid (does not have enough continuous days as 'active' status)
+            for column in calc_df.columns:
+                if column not in ['Date', 'PondID', '_growth_valid']:
+                    calc_df.loc[mask, column] = calc_df.loc[mask].apply(lambda row: row[column] if row['_growth_valid'] == True else None, axis=1)
+
+            # calculate running average growth
+            calc_df.loc[mask, '7d_running_avg_growth'] = calc_df.loc[mask, '7d_growth'].rolling('7d', min_periods=7).mean()
+            calc_df.loc[mask, '7d_running_avg_norm_growth'] = calc_df.loc[mask, '7d_normalized_growth'].rolling('7d', min_periods=7).mean()
+            calc_df.loc[mask, '5d_running_avg_growth'] = calc_df.loc[mask, '7d_growth'].rolling('5d', min_periods=5).mean()
+            calc_df.loc[mask, '5d_running_avg_norm_growth'] = calc_df.loc[mask, '7d_normalized_growth'].rolling('5d', min_periods=5).mean()
 
         # reset index so that 'Date' is a column again
         calc_df = calc_df.reset_index()
 
-        calc_df = calc_df[['Date', 'PondID', '7d_growth', '7d_normalized_growth']]
-        
-        # # update the db (calling a function from .db_utils.py)
-        # update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=growth_df)
-        calc_df.to_excel('test_pond_growth_output.xlsx')
+        calc_df.to_excel('test_growth_per_pond.xlsx', index=False)
 
-class CalcAggMassGrowth(DBColumnsBase):
-    OUT_TABLE_NAME = 'ponds_data_calculated'
-    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus'] # define class dependency that needs to be run prior to an instance of this class
-    MIN_LOOKBACK_DAYS = 7
+        # filter output to include rows only greater than the parameter start_date (since it is overridden to a min of 14 days for calculations to work)
+        calc_df = calc_df[calc_df['Date'] >= _param_start_date]
+
+        # filter to output columns
+        calc_df = calc_df[['Date', 'PondID', 'growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d', '5d_running_avg_growth', '5d_running_avg_norm_growth', '7d_running_avg_growth', '7d_running_avg_norm_growth']]
+
+        return calc_df
+        
+class CalcMassGrowthAggregate(DBColumnsBase):
+    OUT_TABLE_NAME = 'ponds_data_aggregate'
+    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus', 'CalcHarvestedSplit', 'CalcMassGrowthPerPond'] # define class dependency that needs to be run prior to an instance of this class
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
     def run(self):
-        pass
-           
-    def _calc_growth(self, start_date, end_date):
-        # query data to calculate 'liters' (from depth) 
-        # and 'normalized liters' by converting liters with conversion factor (ratio of 'Filter AFDW' value compared to 0.50)
-        ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Filter AFDW', 'Depth'])
-        inches_to_liters = 35000 * 3.78541 # save conversion factor for depth (in inches) to liters
-        ref_df1['liters'] = ref_df1['Depth'].apply(lambda depth_val: inches_to_liters * depth_val)
-        ref_df1['afdw_norm_factor'] = ref_df1['Filter AFDW'] / 0.50
-        ref_df1['normalized_liters'] = ref_df1['liters'] * ref_df1['afdw_norm_factor']
-        
-        # query calculated fields further used in this calculation
-        ref_df2 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['active_status', 'est_harvested', 'calc_mass_nanno_corrected'])
+        agg_growth_df = self._calc_growth_agg(self.run_date_start, self.run_date_end)
 
-        # join the queried dataframes
-        calc_df = pd.merge(ref_df1, ref_df2, on=['Date', 'PondID'], how='outer')
+        # update the db (calling a function from .db_utils.py)
+        update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=agg_growth_df, pk_cols=['Date'])
         
-        # set index as Date so that df.rolling() and df.shift() functions will work with days (to handle gaps in ponds being active)
-        calc_df = calc_df.set_index('Date') 
+    def _calc_growth_agg(self, start_date, end_date):
+        '''
+        minimum date range span to calculate aggregate growth is 7 days
+        '''
+        # check if date range provided is at least 14, else override start_date param
+        _param_start_date = start_date
+        if (end_date - start_date).days < 7:
+            start_date = end_date - pd.Timedelta(days=7)
 
-        # iterate through PondIDs and backfill missing data in the 'normalized_liters' and 'calc_mass_nanno_corrected' columns
-        for pond_id in calc_df['PondID'].unique():
-            mask = (calc_df['PondID'] == pond_id) 
-            calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5) # backfill calculated mass for missing days (weekends, etc)
-        # drop any rows which now contain N/A values for either 'normalized_liters' or 'calc_mass_nanno_corrected'
-        # most being dropped here are probably just 'inactive' but this should catch any other cases with data missing for whatever reason
-        calc_df = calc_df.dropna(how='any', subset=['normalized_liters', 'calc_mass_nanno_corrected']) 
+        # query growth data (by pond) and subtotal by date
+        agg_growth_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d'])
+        agg_growth_df = agg_growth_df.groupby(by='Date').sum()
 
-        # filter out inactive ponds
-        # But do it AFTER backfilling data, to ensure that data isn't backfilled over gaps where a pond isn't active
-        # (therefore, data will be backfilled into non-active days, but then that backfilled data is removed at this step as it isn't valid anyway)
-        calc_df = calc_df[calc_df['active_status'] == True]
+        # calculate 7-d change growth
+        agg_growth_df['agg_7d_growth'] = agg_growth_df['growth_ref_mass_change_grams_7d'] / agg_growth_df['growth_ref_prev_liters_7d']
+        agg_growth_df['agg_7d_norm_growth'] = agg_growth_df['growth_ref_mass_change_grams_7d'] / agg_growth_df['growth_ref_prev_norm_liters_7d']
         
-        # fill in any missing values (that weren't forward filled) with zero
-        calc_df = calc_df.fillna(0)
+        # calculate running average growth
+        agg_growth_df['agg_5d_running_avg_growth'] = agg_growth_df['agg_7d_growth'].rolling('5d', min_periods=5).mean()
+        agg_growth_df['agg_5d_running_avg_norm_growth'] = agg_growth_df['agg_7d_norm_growth'].rolling('5d', min_periods=5).mean()
+        agg_growth_df['agg_7d_running_avg_growth'] = agg_growth_df['agg_7d_growth'].rolling('7d', min_periods=7).mean()
+        agg_growth_df['agg_7d_running_avg_norm_growth'] = agg_growth_df['agg_7d_norm_growth'].rolling('7d', min_periods=7).mean()
 
-        # subtotal all active ponds by 'Date'
-        calc_df = calc_df.groupby(by=['Date']).sum().reset_index()
-        # set 'Date' as index for .rolling() and .shift() to work with daily frequency
-        calc_df = calc_df.set_index('Date') 
-        
-        # calculate rolling harvested amount for past 7-days
-        # since the 'calc_mass_nanno_corrected' includes the harvested amount for the day when harvested, then shift this rolling window by
-        # 1 day and actually only get a 6-day rolling sum (this ensures that harvests are not being counted on the same day) 
-        calc_df['rolling_7_day_harvested_mass'] = calc_df['est_harvested'].shift(1).rolling('6d').sum()
-        
-        # get the 'liters', 'normalized liters', and 'calc_mass' from 7-days ago for ease of calculation
-        calc_df['liters_7_days_prev'] = calc_df['liters'].shift(7, freq='D')
-        calc_df['normalized_liters_7_days_prev'] = calc_df['normalized_liters'].shift(7, freq='D')
-        calc_df['mass_7_days_prev'] = calc_df['calc_mass_nanno_corrected'].shift(7, freq='D')
-        
-        # calculate the net 7-day mass change in both kilograms and grams
-        calc_df['7_day_mass_change_kg'] = calc_df['rolling_7_day_harvested_mass'] + calc_df['calc_mass_nanno_corrected'] - calc_df['mass_7_days_prev']
-        calc_df['7_day_mass_change_grams'] = calc_df['7_day_mass_change_kg'] * 1000
-        
-        # calculate 7-day aggregrate growth (in grams/Liter/day)
-        calc_df['7d_agg_growth'] = calc_df['7_day_mass_change_grams'] / calc_df['liters_7_days_prev']
-        calc_df['7d_agg_normalized_growth'] = calc_df['7_day_mass_change_grams'] / calc_df['normalized_liters_7_days_prev']
+        # reset index so that Date is a column
+        agg_growth_df = agg_growth_df.reset_index()
 
-        # reset index so that 'Date' is a column again
-        calc_df = calc_df.reset_index()
+        agg_growth_df.to_excel('test_agg_growth.xlsx', index=False)
         
-        # calculate 7-day aggregate normalized (to equivalent of Liters if the AFDW was 0.50) growth (in grams/Liter/day)
-        calc_df = calc_df[['Date', '7d_agg_growth', '7d_agg_normalized_growth']]
-        
-        # # update the db (calling a function from .db_utils.py)
-        # update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=growth_df)
-        calc_df.to_excel('test_agg_growth_output.xlsx')
+        # filter output to include rows only greater than the parameter start_date (since it is overridden to a min of 7 days for calculations to work)
+        agg_growth_df = agg_growth_df[agg_growth_df['Date'] >= _param_start_date]
+
+        return agg_growth_df
 
 class CalcHarvestedSplit(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
@@ -1023,7 +1064,7 @@ class CalcHarvestedSplit(DBColumnsBase):
                             update_key = 'est_split'
                         
                         if ref_split_innoc_val_cur == 'HC' or ref_split_innoc_val_next == 'I': # if next row is noted "I" for 'inactive', then assume all mass was harvested and return current day mass
-                            return_dict[update_key] = df_row['_tmp_mass']
+                            return_dict[update_key] = df_row['_tmp_mass'] 
                         else:
                             # if the '_tmp_mass' value is na, then assume change in mass cannot be calculated
                             if pd.isna(df_row['_tmp_mass']):
@@ -1151,177 +1192,11 @@ class WeatherDataLoad(DBColumnsBase):
         # Get daily data
         data = Daily(loc=point, start=start_date, end=end_date).convert(units.imperial).fetch()
         data = data.reset_index().rename(columns={'time':'Date'})
-        data = data[['Date', 'tavg', 'tmin', 'tmax', 'prcp', 'wspd', 'pres']]
+        data = data.rename(columns={'tavg': 'temp_avg', 'tmin': 'temp_min', 'tmax': 'temp_max', 'prcp': 'precipitation', 'wspd': 'wind_speed', 'pres': 'pressure'})
+        data = data[['Date', 'temp_avg', 'temp_min', 'temp_max', 'precipitation', 'wind_speed', 'pressure']]
         return data
 
-############# TODO: update growth calculation with method using db
-#         def calculate_growth(pond_data_df, run_date, num_days, remove_outliers, data_count_threshold=2, weighted_stats_for_outliers=True):
-#             '''
-#             NEW **** MOVED TO DATALOADER, UTILIZE DATABASE TO QUERY/CALCULATE THIS?? ****
-#             NOT UPDATED YET
-            
-#             pond_data_df: pandas dataframe
-#                 - dataframe for individual pond
-#             run_date: datetime.date
-#                 - current date (required for growth relative to this date)
-#             remove_outliers: bool
-#                 - whether to remove outliers from the data before calculating growth (which are then zeroed and forward-filled)
-#                 - outliers are calculated using the 10 most-recent non-zero data points
-#                 - when this is set then the current day is excluded from calculating mean and std. dev (since it's more likely to be an outlier itself)
-#             num_days: int
-#                 - number of days to calculate growth for
-#             data_count_threshold: int 
-#                 - absolute threshold for days that must have data within the num_days growth period, otherwise growth will be 'n/a'
-#             weighted_stats_for_outliers: bool
-#                 - whether to use weighted statistics for finding outliers, applies 80% weight evenly to the most-recent 5 days, then 20% to the remainder
-#             outlier_stddev_thresh: int
-#                 - the standard deviation threshold for determining outliers (when greater or less than the threshold * standard deviation)
-#                 - using a threshold of 2 standard deviations as default for more aggressive outlier detection (statistical standard is usally 3 std. dev.)
-#             pond_test: str
-#                 - FOR TESTING: string corresponds to pond_name to display df output between steps
-#             '''
-            
-#             # the standard deviation threshold for determining outliers (when greater or less than the threshold * standard deviation)
-#             # using a threshold of 2.25 standard deviations as default for more aggressive outlier detection (statistical standard is usally 3 std. dev.)
-#             outlier_stddev_thresh = 2.25 
-            
-#             pond_test=None # set to pond_name string for printing output at intermediate calculation steps
-            
-#             # Select last 20 days of data for columns 'AFDW', 'Depth', and 'Split Innoculum' (higher num in case of missing data, etc)
-#             pond_growth_df = pond_data_df.loc[run_date - pd.Timedelta(days=20):run_date][['AFDW (filter)', 'Depth', 'Split Innoculum']]
-#             # Get calculated mass column from AFDW and Depth
-#             pond_growth_df['mass'] = afdw_depth_to_mass(pond_growth_df['AFDW (filter)'], pond_growth_df['Depth'], pond_name)
-            
-#             def next_since_harvest_check(row):
-#                 ''' helper function for df.apply to label row as the next available data since a pond was last harvested. checks 3 days prior'''
-#                 if row['mass'] != 0:
-#                     if row['tmp harvest prev 1'] == 'Y': # if the previous day was harvested ('H' in 'Split Innoculum' col)
-#                         return 'Y'
-#                     elif row['tmp data prev 1'] == 'N' and row['tmp harvest prev 2'] == 'Y': # if 
-#                         return 'Y'
-#                     elif row['tmp data prev 1'] == 'N' and row['tmp data prev 2'] == 'N' and row['tmp harvest prev 3'] == 'Y':
-#                         return 'Y'
-#                     else:
-#                         return ''
-#                 else:
-#                     return ''
-    
-#             # find if row is the next data since harvest (i.e., if there is a few days delay in data since it was harvested), to ensure negative change from harvest is always zeroed out for growth calcs
-#             pond_growth_df['tmp data prev 1'] = pond_growth_df['mass'].shift(1).apply(lambda val: 'Y' if val != 0 else 'N')
-#             pond_growth_df['tmp data prev 2'] = pond_growth_df['mass'].shift(2).apply(lambda val: 'Y' if val != 0 else 'N')
-#             pond_growth_df['tmp harvest prev 1'] = pond_growth_df['Split Innoculum'].shift(1).apply(lambda val: 'Y' if val == 'H' or val == 'S' else 'N')
-#             pond_growth_df['tmp harvest prev 2'] = pond_growth_df['Split Innoculum'].shift(2).apply(lambda val: 'Y' if val == 'H' or val == 'S' else 'N')
-#             pond_growth_df['tmp harvest prev 3'] = pond_growth_df['Split Innoculum'].shift(3).apply(lambda val: 'Y' if val == 'H' or val == 'S' else 'N')
-#             pond_growth_df['next data since harvest'] = pond_growth_df.apply(lambda row: next_since_harvest_check(row), axis=1) 
-#             del pond_growth_df['tmp data prev 1']
-#             del pond_growth_df['tmp data prev 2'] 
-#             del pond_growth_df['tmp harvest prev 1'] 
-#             del pond_growth_df['tmp harvest prev 2'] 
-#             del pond_growth_df['tmp harvest prev 3']
-    
-#             if remove_outliers: # calculate and drop outliers
-#                 # get a new df for outlier detection and drop the last/ most recent row, 
-#                 # assuming it is highly likely an outlier (due to data entry error, etc), so exclude that value from calc of mean and std dev for detecting outliers
-#                 mass_nonzero_ = pond_growth_df.drop([run_date], axis=0) 
-#                 mass_nonzero_ = mass_nonzero_[mass_nonzero_['mass'] != 0]['mass'] # get a pandas series with only nonzero values for calculated mass
-#                 # limit selection for outlier detection to the last 10 non-zero values
-#                 mass_nonzero_ = mass_nonzero_.iloc[-10:]
-                
-#                 if pond_name == pond_test:
-#                     print('std dev: ', mass_nonzero_.std())
-#                     print('mean: ', mass_nonzero_.mean())
-#                     print('TEST LENGTH QUANTILESDF', len(mass_nonzero_), mass_nonzero_)
-                
-#                 if weighted_stats_for_outliers and len(mass_nonzero_) >= 5: # use weighted stats if specified, UNLESS there are less than 5 non-zero "mass" datapoints in total
-#                     from statsmodels.stats.weightstats import DescrStatsW
-                    
-#                     # init weights for weighted outlier detection (list should sum to 1 total)
-#                     outlier_weights_ = [0.16]*5 # first 5 values weighted to 0.8 total
-#                     if len(mass_nonzero_) > 5: # add more weights if necessary (between 1 and 5 more)
-#                         outlier_weights_ += [((1-sum(outlier_weights_)) / (len(mass_nonzero_)-len(outlier_weights_)))] * (len(mass_nonzero_)-len(outlier_weights_))
-                    
-#                     weighted_stats = DescrStatsW(mass_nonzero_.iloc[::-1], weights=outlier_weights_, ddof=0)
-    
-#                     if pond_name == pond_test:
-#                         print(f'Weighted mean: {weighted_stats.mean}, Weighted Std Dev: {weighted_stats.std}, weighted outlier range (+- {outlier_stddev_thresh} std dev): <{weighted_stats.mean-(outlier_stddev_thresh*weighted_stats.std)}, >{weighted_stats.mean+(outlier_stddev_thresh*weighted_stats.std)}')
-#                         print(f'Non-Weighted mean: {mass_nonzero_.mean()}, Non-Weighted Std Dev: {mass_nonzero_.std()}, non-weighted outlier range (+- {outlier_stddev_thresh} std dev): <{mass_nonzero_.mean()-(outlier_stddev_thresh*mass_nonzero_.std())}, >{mass_nonzero_.mean()+(outlier_stddev_thresh*mass_nonzero_.std())}')
-#                         print('test df', test_mean := mass_nonzero_[-5:])
-                    
-#                     mass_nonzero_mean_ = weighted_stats.mean
-#                     mass_nonzero_std_ = weighted_stats.std
-#                 else: # using regular statistics / non-weighted
-#                     mass_nonzero_mean_ = mass_nonzero_.mean()
-#                     mass_nonzero_std_ = mass_nonzero_.std()
-    
-#                 if pond_name == pond_test:
-#                     print(f'TESTING FOR POND {pond_name}')
-#                     print('outliers\n', pond_growth_df[(pond_growth_df['mass']-mass_nonzero_mean_).apply(lambda x: -x if x < 0 else x) >= (outlier_stddev_thresh*mass_nonzero_std_)], 'testing outliers')
-                
-#                 #outliers_df = pond_growth_df[np.abs(pond_growth_df['mass']-mass_nonzero_mean_) >= (outlier_stddev_thresh*mass_nonzero_std_)]
-#                 outliers_df = pond_growth_df[(pond_growth_df['mass']-mass_nonzero_mean_).apply(lambda x: -x if x < 0 else x) >= (outlier_stddev_thresh*mass_nonzero_std_)]
-#                 pond_growth_df = pond_growth_df.assign(outlier=pond_growth_df.index.isin(outliers_df.index)) # assign 'outliers' column equal to True if data point is an outlier
-    
-#                 if pond_name == pond_test:
-#                     print('Starting data\n')
-#                     from IPython.display import display
-#                     display(pond_growth_df)
-    
-#                 # set the mass of outliers to 0
-#                 pond_growth_df['mass'] = pond_growth_df.apply(lambda row: 0 if row['outlier'] == True else row['mass'], axis=1)
-    
-#                 if pond_name == pond_test:
-#                     print('\nAfter removing outliers\n')
-#                     display(pond_growth_df)
-            
-#             # check if enough data exists for calculating growth, and return 'n/a' early if not
-#             growth_period_data_count = pond_growth_df.loc[run_date - pd.Timedelta(days=num_days-1):run_date][pond_growth_df['mass'] != 0]['mass'].count()
-#             if growth_period_data_count < data_count_threshold:
-#                 return 'n/a'
-            
-#             # forward fill zero-values
-#             pond_growth_df['mass'] = pond_growth_df['mass'].replace(0, float('nan')).fillna(method='ffill') # replace 0 with nan for fillna() to work
-    
-#             if pond_name == pond_test:
-#                 print('\nAfter forward-filling zero vals\n')
-#                 display(pond_growth_df)
-    
-#             # calculate estimated harvest amount, not used elsewhere but could be useful for some aggregate tracking
-#             pond_growth_df['tmp prev mass'] = pond_growth_df['mass'].shift(1)
-#             pond_growth_df['tmp next mass'] = pond_growth_df['mass'].shift(-1)
-#             pond_growth_df['harvested estimate'] = pond_growth_df.apply(lambda row: row['tmp prev mass'] - row['mass'] if row['next data since harvest'] == 'Y' else 0, axis=1)
-    
-#             pond_growth_df['day chng'] = pond_growth_df.apply(lambda row: row['mass'] - row['tmp prev mass'] if row['next data since harvest'] != 'Y' else 0, axis=1)
-#             del pond_growth_df['tmp prev mass'] 
-#             del pond_growth_df['tmp next mass'] 
-    
-#             if pond_name == pond_test:
-#                 print('\nAfter calculating estimated harvest and daily change in mass')
-#                 display(pond_growth_df)
-    
-#             # calculate growth
-#             try:
-#                 daily_growth_rate_ = int(pond_growth_df.loc[run_date - pd.Timedelta(days=num_days-1):run_date]['day chng'].sum() / num_days)
-#                 if pond_name == pond_test:
-#                     display(daily_growth_rate_)
-#                 return daily_growth_rate_
-#             except:
-#                 return 'n/a: Error'
 
-#             ## TODO: outlier detection (pond 0402 - 1/16/23 as example of outlier to remove)
-#             # import numpy as np
-# #                         quantiles_df = pond_growth_df[pond_growth_df['mass'] != 0]['mass']
-# #                         print('std dev: ', quantiles_df.std())
-# #                         print('mean: ', quantiles_df.mean())
-# #                         print(quantiles_df[np.abs(quantiles_df-quantiles_df.mean()) <= (3*quantiles_df.std())])
-
-# #                         quantile_low = quantiles_df.quantile(0.01)
-# #                         quantile_high = quantiles_df.quantile(0.99)
-# #                         iqr = quantile_high - quantile_low
-# #                         low_bound = quantile_low - (1.5*iqr)
-# #                         high_bound = quantile_high + (1.5*iqr)
-# #                         print('low quantile: ', quantile_low, '| high quantile: ', quantile_high)
-# #                         print('low bound: ', low_bound, '| high bound: ', high_bound)
-           
 ## TODO PROCESSING AND SFDATA
     # def load_processing_data(self, excel_filename):
     #     print('Loading processing data')
