@@ -835,18 +835,19 @@ class CalcMassGrowthPerPond(DBColumnsBase):
     
     def _calc_growth(self, start_date, end_date) -> pd.DataFrame:
         '''
-        minimum date range is 14 days of data to calc growth:
+        minimum date range is 26 days of data to calc growth:
+            - extra 5 days padding for forward filling missing data (weekends, etc)
             - week-to-week growth: 7 days lookback
-            - daily rolling average: 7 days of week-to-week growth data
+            - daily rolling average: 14 days of week-to-week growth data
         '''
-        # check if date range provided is at least 14, else override start_date param
+        # check if date range provided is at least 26, else override start_date param
         _param_start_date = start_date
-        if (end_date - start_date).days < 14:
-            start_date = end_date - pd.Timedelta(days=14)
+        if (end_date - start_date).days < 26:
+            start_date = end_date - pd.Timedelta(days=26)
   
         # query data to calculate 'liters' (from depth) 
         # and 'normalized liters' by converting liters with conversion factor (ratio of 'Filter AFDW' value compared to 0.50)
-        ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Filter AFDW', 'Depth'])
+        ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Filter AFDW', 'Depth'], check_safe_date=True)
 
         # if either 'Filter AFDW' or 'Depth' value is missing for any date, then replace both with None
         # because without both the row is not a good reference for measuring growth
@@ -864,7 +865,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         ref_df1['normalized_liters'] = ref_df1['liters'] * ref_df1['afdw_norm_factor']
 
         # query calculated fields further used in this calculation
-        ref_df2 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['active_status', 'est_harvested', 'calc_mass_nanno_corrected'])
+        ref_df2 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['active_status', 'est_harvested', 'est_split', 'calc_mass_nanno_corrected'], check_safe_date=True)
 
         # join the queried dataframes
         calc_df = pd.merge(ref_df1, ref_df2, on=['Date', 'PondID'], how='outer')
@@ -872,7 +873,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         # set index as Date so that df.rolling() and df.shift() functions will work with days (to handle gaps in ponds being active)
         calc_df = calc_df.set_index('Date') 
         for pond_id in calc_df['PondID'].unique():
-            # set mask only on PondID field and backfill necessary data cols            
+            # set mask only on PondID field         
             mask = (calc_df['PondID'] == pond_id) 
 
             # compute a column as a check to whether growth can be computed for any date
@@ -891,11 +892,21 @@ class CalcMassGrowthPerPond(DBColumnsBase):
                 else:
                     return True
             calc_df.loc[mask, '_growth_valid'] = calc_df.loc[mask, :].apply(lambda row: _check_growth_valid(row), axis=1)
-                
-            # backfill calculated mass for missing days (weekends, etc)
-            # .bfill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with backfilling so ensure that 5 day limit is applied
-            calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5) 
 
+            # fill liters and mass data for missing days (weekends, etc)
+            # .bfill() and ffill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with forward filling so ensure that 5 day limit is applied
+            # use a method similar to CalcHarvestedSplit for filling vals: 
+            # first, for any missing vals where a harvest or split has been calculated, then replace those vals with a temporary placeholder string
+            tmp_placeholder_mask = (calc_df['PondID'] == pond_id) & ((calc_df['est_harvested'] > 0) | (calc_df['est_split'] > 0)) & ((pd.isna(calc_df['calc_mass_nanno_corrected']) == True) | (calc_df['calc_mass_nanno_corrected'] == 0))
+            calc_df.loc[tmp_placeholder_mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = '_tmp_placeholder_for_ffill'
+            
+            # second, backfill values (so that the placeholder string blocks filling back to the date of harvest/split
+            calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5)
+           
+            # third, replace placeholder strings, then forward fill values 
+            calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']].replace('_tmp_placeholder_for_ffill', None)
+            calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']].ffill(limit=5)
+            
             # update mask to include 'active' ponds only
             # this is necessary because further steps perform row lookbacks, and need to ensure that data filled onto an inactive day isn't factored in
             mask = (calc_df['PondID'] == pond_id) & (calc_df['active_status'] == True) 
@@ -903,7 +914,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # get "harvest corrected (hc)" values for liters, normalized _liters, and calc_mass (next day val, if day has been noted as a harvest with a calculated harvest val > 0)
             # per Kurt, this is so that variance in pond levels and density is factored out of growth calcs
             def _get_harvest_corrected_val(row, col_name):
-                if not pd.isna(row['est_harvested']) and row['est_harvested'] > 0:
+                if (not pd.isna(row['est_harvested']) and row['est_harvested'] > 0) or (not pd.isna(row['est_split']) and row['est_split'] > 0):
                     rval_df = calc_df.loc[mask, col_name].shift(-1, freq='D')  
                     if row.name in rval_df:
                         return rval_df.loc[row.name]
@@ -915,13 +926,15 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             calc_df.loc[mask, 'hc_normalized_liters'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'normalized_liters'), axis=1)
             calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'calc_mass_nanno_corrected'), axis=1)
            
-            # fill in n/a values in 'est_harvested' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
+            # fill in n/a values in 'est_harvested' and 'est_split' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
             calc_df.loc[mask, 'est_harvested'] = calc_df.loc[mask, 'est_harvested'].fillna(0) 
+            calc_df.loc[mask, 'est_split'] = calc_df.loc[mask, 'est_split'].fillna(0) 
 
             # calculate rolling harvested amount for past 7-days
             # since the 'calc_mass_nanno_corrected' includes the harvested amount for the day when harvested, then shift this rolling window by
             # 1 day and actually only get a 6-day rolling sum (this ensures that harvests are not being double counted on the same day) 
             calc_df.loc[mask, 'rolling_7d_harvested_mass'] = calc_df.loc[mask, 'est_harvested'].shift(1).rolling('6d').sum()
+            calc_df.loc[mask, 'rolling_7d_split_mass'] = calc_df.loc[mask, 'est_split'].shift(1).rolling('6d').sum()
             
             # get the 'liters', 'normalized liters' from 7-days ago, using "harvest corrected" columns
             calc_df.loc[mask, 'growth_ref_prev_liters_7d'] = calc_df.loc[mask, 'hc_liters'].shift(7, freq='D')
@@ -931,7 +944,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             calc_df.loc[mask, 'mass_7d_prev'] = calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'].shift(7, freq='D')
             
             # calculate the net 7-day mass change in both kilograms and grams
-            calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = (calc_df.loc[mask, 'rolling_7d_harvested_mass'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7d_prev'])
+            calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = (calc_df.loc[mask, 'rolling_7d_harvested_mass'] + calc_df.loc[mask, 'rolling_7d_split_mass'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7d_prev'])
             calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'] = calc_df.loc[mask, 'growth_ref_mass_change_kg_7d']*1000
             
             # calculate growth
@@ -944,11 +957,11 @@ class CalcMassGrowthPerPond(DBColumnsBase):
                     calc_df.loc[mask, column] = calc_df.loc[mask].apply(lambda row: row[column] if row['_growth_valid'] == True else None, axis=1)
 
             # calculate running average growth
-            calc_df.loc[mask, '7d_running_avg_growth'] = calc_df.loc[mask, '7d_growth'].rolling('7d', min_periods=7).mean()
-            calc_df.loc[mask, '7d_running_avg_norm_growth'] = calc_df.loc[mask, '7d_normalized_growth'].rolling('7d', min_periods=7).mean()
             calc_df.loc[mask, '5d_running_avg_growth'] = calc_df.loc[mask, '7d_growth'].rolling('5d', min_periods=5).mean()
             calc_df.loc[mask, '5d_running_avg_norm_growth'] = calc_df.loc[mask, '7d_normalized_growth'].rolling('5d', min_periods=5).mean()
-
+            calc_df.loc[mask, '14d_running_avg_growth'] = calc_df.loc[mask, '7d_growth'].rolling('14d', min_periods=14).mean()
+            calc_df.loc[mask, '14d_running_avg_norm_growth'] = calc_df.loc[mask, '7d_normalized_growth'].rolling('14d', min_periods=14).mean()
+            
         # reset index so that 'Date' is a column again
         calc_df = calc_df.reset_index()
 
@@ -958,7 +971,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         calc_df = calc_df[calc_df['Date'] >= _param_start_date]
 
         # filter to output columns
-        calc_df = calc_df[['Date', 'PondID', 'growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d', '5d_running_avg_growth', '5d_running_avg_norm_growth', '7d_running_avg_growth', '7d_running_avg_norm_growth']]
+        calc_df = calc_df[['Date', 'PondID', 'growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d', '5d_running_avg_growth', '5d_running_avg_norm_growth', '14d_running_avg_growth', '14d_running_avg_norm_growth']]
 
         return calc_df
         
@@ -995,8 +1008,8 @@ class CalcMassGrowthAggregate(DBColumnsBase):
         # calculate running average growth
         agg_growth_df['agg_5d_running_avg_growth'] = agg_growth_df['agg_7d_growth'].rolling('5d', min_periods=5).mean()
         agg_growth_df['agg_5d_running_avg_norm_growth'] = agg_growth_df['agg_7d_norm_growth'].rolling('5d', min_periods=5).mean()
-        agg_growth_df['agg_7d_running_avg_growth'] = agg_growth_df['agg_7d_growth'].rolling('7d', min_periods=7).mean()
-        agg_growth_df['agg_7d_running_avg_norm_growth'] = agg_growth_df['agg_7d_norm_growth'].rolling('7d', min_periods=7).mean()
+        agg_growth_df['agg_14d_running_avg_growth'] = agg_growth_df['agg_7d_growth'].rolling('14d', min_periods=14).mean()
+        agg_growth_df['agg_14d_running_avg_norm_growth'] = agg_growth_df['agg_7d_norm_growth'].rolling('14d', min_periods=14).mean()
 
         # reset index so that Date is a column
         agg_growth_df = agg_growth_df.reset_index()
