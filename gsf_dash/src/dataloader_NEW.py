@@ -99,6 +99,12 @@ class Dataloader:
         init_tables()
         rebuild_db_run(start_date, end_date)
 
+    def _update_existing_db_new_tables(self) -> None:
+        db_schema_files = [f.name.split('.')[0] for f in Path().glob("settings/db_schemas/*.create_table")]
+        for table_name in db_schema_files:
+            if not check_if_table_exists(self.db_engine, table_name): # True if table exists, False otherwise
+                init_db_table(self.db_engine, table_name)
+
 class DBColumnsBase(ABC):
     ponds_list = ['0101', '0201', '0301', '0401', '0501', '0601', '0701', '0801', '0901', '1001', '1101', '1201', 
                   '0102', '0202', '0302', '0402', '0502', '0602', '0702', '0802', '0902', '1002', '1102', '1202',
@@ -113,6 +119,8 @@ class DBColumnsBase(ABC):
         params:
             db_engine: sqlalchemy Engine
             run_date_start: datetime
+                - if range between run_date_start and run_date_end is < self.MIN_LOOKBACK_DAYS (default=5), 
+                  then run_date_start is adjusted so that the date range is equal to self.MIN_LOOKBACK_DAYS
             run_date_end: datetime
             run: FOR TESTING - True by default
         '''
@@ -148,6 +156,34 @@ class DBColumnsBase(ABC):
         '''
         Extract, transform, and load data into database table (self.OUT_TABLE_NAME)
         '''
+
+    def _dl_sharepoint_files(self, file_identifier_str: list[str]|str) -> dict:
+        '''
+        params: 
+            file_identifier_str_list:
+                - list of strings corresponding to key in settings.cfg file under 'file_ids' category
+                - OR a single string (which is converted to a list of length 1)
+
+        output:
+            dictionary:
+                - key: file idenfifier string (same as key in settings.cfg file)
+                - value: pathlib.Path object corresponding to downloaded file
+        '''
+        # convert to a list if only a single string param provided
+        if type(file_identifier_str) == str:
+            file_identifier_str = [file_identifier_str]
+        
+        # get file IDs from settings file, get only the values from the dict that's returned
+        file_ids = {k: v for (k, v) in load_setting('file_ids').items() if k in file_identifier_str}
+
+        out_file_paths = {}
+        for (label, file_id) in file_ids.items():
+            tmp_file_path = self.account.download_sharepoint_file_by_id(object_id=file_id, name=f'{label}.xlsx', to_path=Path('data_sources/tmp/')) # returns file path, else returns None if failed
+            if tmp_file_path is not None:
+                out_file_paths[label] = tmp_file_path
+            else:
+                raise Exception(f'ERROR: failure downloading data for {label}: {file_id}!')
+        return out_file_paths
 
 class DailyDataLoad(DBColumnsBase):
     ''' 
@@ -943,24 +979,23 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # get 'calc_mass' from 7-days ago for mass change calculation, using 'harvest corrected' values
             calc_df.loc[mask, 'mass_7d_prev'] = calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'].shift(7, freq='D')
             
-            # calculate the net 7-day mass change in both kilograms and grams
+            # calculate the net 7-day mass change in kg
             calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = (calc_df.loc[mask, 'rolling_7d_harvested_mass'] + calc_df.loc[mask, 'rolling_7d_split_mass'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7d_prev'])
+            # filter out negative mass change (more than likely this is due to measurement errors)
+            calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'].apply(lambda x: x if x > 0 else 0)
+            # convert kilograms to grams for growth calc
             calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'] = calc_df.loc[mask, 'growth_ref_mass_change_kg_7d']*1000
             
-            # calculate growth
-            calc_df.loc[mask, '7d_growth'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'] / calc_df.loc[mask, 'growth_ref_prev_liters_7d']
-            calc_df.loc[mask, '7d_normalized_growth'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'] / calc_df.loc[mask, 'growth_ref_prev_norm_liters_7d']
-
             # clear out the rows where growth cannot be valid (does not have enough continuous days as 'active' status)
             for column in calc_df.columns:
                 if column not in ['Date', 'PondID', '_growth_valid']:
                     calc_df.loc[mask, column] = calc_df.loc[mask].apply(lambda row: row[column] if row['_growth_valid'] == True else None, axis=1)
 
             # calculate running average growth
-            calc_df.loc[mask, '5d_running_avg_growth'] = calc_df.loc[mask, '7d_growth'].rolling('5d', min_periods=5).mean()
-            calc_df.loc[mask, '5d_running_avg_norm_growth'] = calc_df.loc[mask, '7d_normalized_growth'].rolling('5d', min_periods=5).mean()
-            calc_df.loc[mask, '14d_running_avg_growth'] = calc_df.loc[mask, '7d_growth'].rolling('14d', min_periods=14).mean()
-            calc_df.loc[mask, '14d_running_avg_norm_growth'] = calc_df.loc[mask, '7d_normalized_growth'].rolling('14d', min_periods=14).mean()
+            calc_df.loc[mask, 'running_avg_growth_5d'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'].rolling('5d', min_periods=5).sum() / calc_df.loc[mask, 'growth_ref_prev_liters_7d'].rolling('5d', min_periods=5).sum()
+            calc_df.loc[mask, 'running_avg_norm_growth_5d'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'].rolling('5d', min_periods=5).sum() / calc_df.loc[mask, 'growth_ref_prev_norm_liters_7d'].rolling('5d', min_periods=5).sum()
+            calc_df.loc[mask, 'running_avg_growth_14d'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'].rolling('14d', min_periods=14).sum() / calc_df.loc[mask, 'growth_ref_prev_liters_7d'].rolling('14d', min_periods=14).sum()
+            calc_df.loc[mask, 'running_avg_norm_growth_14d'] = calc_df.loc[mask, 'growth_ref_mass_change_grams_7d'].rolling('14d', min_periods=14).sum() / calc_df.loc[mask, 'growth_ref_prev_norm_liters_7d'].rolling('14d', min_periods=14).sum()
             
         # reset index so that 'Date' is a column again
         calc_df = calc_df.reset_index()
@@ -971,7 +1006,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         calc_df = calc_df[calc_df['Date'] >= _param_start_date]
 
         # filter to output columns
-        calc_df = calc_df[['Date', 'PondID', 'growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d', '5d_running_avg_growth', '5d_running_avg_norm_growth', '14d_running_avg_growth', '14d_running_avg_norm_growth']]
+        calc_df = calc_df[['Date', 'PondID', 'growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d', 'running_avg_growth_5d', 'running_avg_norm_growth_5d', 'running_avg_growth_14d', 'running_avg_norm_growth_14d']]
 
         return calc_df
         
@@ -1000,16 +1035,12 @@ class CalcMassGrowthAggregate(DBColumnsBase):
         # query growth data (by pond) and subtotal by date
         agg_growth_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d'])
         agg_growth_df = agg_growth_df.groupby(by='Date').sum()
-
-        # calculate 7-d change growth
-        agg_growth_df['agg_7d_growth'] = agg_growth_df['growth_ref_mass_change_grams_7d'] / agg_growth_df['growth_ref_prev_liters_7d']
-        agg_growth_df['agg_7d_norm_growth'] = agg_growth_df['growth_ref_mass_change_grams_7d'] / agg_growth_df['growth_ref_prev_norm_liters_7d']
         
         # calculate running average growth
-        agg_growth_df['agg_5d_running_avg_growth'] = agg_growth_df['agg_7d_growth'].rolling('5d', min_periods=5).mean()
-        agg_growth_df['agg_5d_running_avg_norm_growth'] = agg_growth_df['agg_7d_norm_growth'].rolling('5d', min_periods=5).mean()
-        agg_growth_df['agg_14d_running_avg_growth'] = agg_growth_df['agg_7d_growth'].rolling('14d', min_periods=14).mean()
-        agg_growth_df['agg_14d_running_avg_norm_growth'] = agg_growth_df['agg_7d_norm_growth'].rolling('14d', min_periods=14).mean()
+        agg_growth_df['agg_running_avg_growth_5d'] = agg_growth_df['growth_ref_mass_change_grams_7d'].rolling('5d', min_periods=5).sum() / agg_growth_df['growth_ref_prev_liters_7d'].rolling('5d', min_periods=5).sum()
+        agg_growth_df['agg_running_avg_norm_growth_5d'] = agg_growth_df['growth_ref_mass_change_grams_7d'].rolling('5d', min_periods=5).sum() / agg_growth_df['growth_ref_prev_norm_liters_7d'].rolling('5d', min_periods=5).sum()
+        agg_growth_df['agg_running_avg_growth_14d'] = agg_growth_df['growth_ref_mass_change_grams_7d'].rolling('14d', min_periods=14).sum() / agg_growth_df['growth_ref_prev_liters_7d'].rolling('14d', min_periods=14).sum()
+        agg_growth_df['agg_running_avg_norm_growth_14d'] = agg_growth_df['growth_ref_mass_change_grams_7d'].rolling('14d', min_periods=14).sum() / agg_growth_df['growth_ref_prev_norm_liters_7d'].rolling('14d', min_periods=14).sum()
 
         # reset index so that Date is a column
         agg_growth_df = agg_growth_df.reset_index()
@@ -1209,17 +1240,39 @@ class WeatherDataLoad(DBColumnsBase):
         data = data[['Date', 'temp_avg', 'temp_min', 'temp_max', 'precipitation', 'wind_speed', 'pressure']]
         return data
 
+class ProcessingDataLoad(DBColumnsBase):
+    OUT_TABLE_NAME = 'daily_processing_data'
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    def run(self):
+        out_df = self._load_processing_data(start_date=self.run_date_start, end_date=self.run_date_end) 
+        
+        # update the db (calling a function from .db_utils.py)
+        update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=out_df, pk_cols=['Date'])
+    
+    def _load_processing_data(self, start_date: datetime, end_date: datetime):
+        # download data file
+        proc_data_path = list(self._dl_sharepoint_files('processing_data').values())[0]
 
-## TODO PROCESSING AND SFDATA
-    # def load_processing_data(self, excel_filename):
-    #     print('Loading processing data')
-    #     df = pd.read_excel(excel_filename, sheet_name='SF Harvest')
-    #     df = df.rename(columns={df.columns[0]:'date'})
-    #     df['date'] = pd.to_datetime(df['date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
-    #     df = df.set_index(df['date'].name) # set date column as index
-    #     df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
-    #     print('Processing data loaded!')
-    #     return df
+        # load downloaded file
+        df = pd.read_excel(proc_data_path, sheet_name='SF Harvest')
+        df = df.rename(columns={df.columns[0]:'Date'})
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.normalize() # convert date column from string *use .normalize method to remove potential time data
+        df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
+
+        # construct a DF with combination of all possible Date and PondID columns for date range to ensure that no dates are missing (for indexing by date in db)
+        date_range = pd.date_range(start=start_date, end=end_date)
+        dates_df = pd.DataFrame(date_range, columns=['Date'])
+
+        out_df = pd.merge(df, dates_df, how='outer', on='Date').sort_values(by='Date')
+        out_df = out_df[out_df['Date'].between(start_date, end_date)]
+        out_columns = ['Date', 'Zobi Permeate Volume (gal)', 'SF Reported Permeate Volume (gal)', 'Calculated SF Permeate Volume (gal)', 'Calculated Permeate Volume (gal)', 
+                       'DFP Level (in)', 'SF Slurry Produced (MT)', 'Zobi Slurry Produced (MT)', 'SW Dryer Totes', 'SW Dryer Biomass (MT)', 'Drum Dryer Totes', 'Drum Dryer Biomass (MT)', 
+                       'Gallons dropped', 'HF1 Run Time (hours)', 'HF2 Run Time (hours)', 'SF1 Run Time (hours)', 'SF2 Run Time (hours)', 'SF3 Run Time (hours)', 'Notes', 
+                       'Volume Dropped from Ponds (gallons)', 'Lazy River AFDW (g/L)', 'SF Feed AFDW (g/L)', 'Zobi Run TIme (hours)', 'DD Run TIme (hours)', 'SW Dryer Run TIme (hours)']
+        return out_df[out_columns]
     
     # def load_sfdata(self, excel_filename):
     #     print('Loading SF Data')
