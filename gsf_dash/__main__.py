@@ -46,11 +46,11 @@ def main(argv):
     '''
     LOAD DATA
     '''
-    try:
-        datadict = Dataloader(args.date).outdata
-    except Exception as ex:
-        tb = ''.join(traceback.TracebackException.from_exception(ex).format())
-        failure_notify_email_exit(f'Error downloading or loading data', tb)
+    # try:
+    #     datadict = Dataloader(args.date).outdata
+    # except Exception as ex:
+    #     tb = ''.join(traceback.TracebackException.from_exception(ex).format())
+    #     failure_notify_email_exit(f'Error downloading or loading data', tb)
 
     # TEMPORARY INTEGRATION OF NEW DATABASE LOADING METHODS
     # LOADS DATE INTO DB FOR CURRENT DATE (AND 4 DAYS PRIOR, IN CASE OF DATA UPDATES AND/OR MISSED RUNS)
@@ -66,7 +66,7 @@ def main(argv):
      - returns output filenames
     '''
     try:
-        output_filenames = PondsOverviewPlots(args.date, **datadict).output_filenames
+        output_filenames = PondsOverviewPlots(args.date).output_filenames
     except Exception as ex:
         tb = ''.join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f'Error running pond overview script', tb)
