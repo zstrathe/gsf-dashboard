@@ -1,4 +1,5 @@
 from datetime import datetime
+import functools
 import pandas as pd
 import warnings
 import math
@@ -694,7 +695,7 @@ class PondsOverviewPlots:
             plt.savefig(out_filename, bbox_inches='tight')
             return out_filename
     
-    def plot_potential_harvests(self, overall_spacing=0.03): 
+    def plot_potential_harvests(self, min_afdw=0.50, min_epa=3.0, overall_spacing=0.03): 
 
         def gen_fig(title=False):
             # Initialize plot
@@ -713,7 +714,7 @@ class PondsOverviewPlots:
             #ax.minorticks_on()
             if title:
                 title_text1 = f'Recommended Harvests - {str(select_date.strftime("%-m/%-d/%y"))}' 
-                title_text2 = ('\nponds with' + r'$\geq$' + '0.50 AFDW and' + r'$\geq$' + '3% EPA, with estimated harvest depth to reach 0.40 AFDW after top off to 13"\n\n' + 
+                title_text2 = ('\nponds with' + r'$\geq$' + f'{min_afdw:.2f} AFDW and' + r'$\geq$' + f'{min_epa:.0f}% EPA, with estimated harvest depth to reach 0.40 AFDW after top off to 13"\n\n' + 
                               f'Total recommended harvest mass: {total_harvestable_mass:,.0f} kg\n' +
                               f'Total recommended harvest volume: {total_harvestable_gallons:,.0f} gal')
                 t1 = ax.text(0.5, 1, title_text1, ha='center', va='top', fontsize=14, weight='bold')
@@ -763,23 +764,31 @@ class PondsOverviewPlots:
                                                          table_name='ponds_data', 
                                                          query_date_start=self.select_date, 
                                                          query_date_end=self.select_date,
-                                                         col_names=['Depth', 'Column'])
+                                                         col_names=['Depth', 'Column', 'Filter AFDW'])
         df2 = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
                                                          table_name='ponds_data_calculated', 
                                                          query_date_start=self.select_date, 
                                                          query_date_end=self.select_date,
-                                                         col_names=['harvestable_depth_inches', 'harvestable_gallons', 'harvestable_mass_nanno_corrected'])
-        potential_harvests_df = pd.merge(df1, df2, how='left', on=['Date', 'PondID'])
+                                                         col_names=['harvestable_depth_inches', 'harvestable_gallons', 'harvestable_mass_nanno_corrected', 'days_since_harvested_split'])
+        df3 = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+                                                         table_name='epa_data', 
+                                                         query_date_start=self.select_date, 
+                                                         query_date_end=self.select_date,
+                                                         col_names=['epa_val'])
+        # Combine dfs
+        potential_harvests_df = functools.reduce(lambda df1, df2: pd.merge(df1, df2, on=['Date','PondID'], how='outer'), [df1, df2, df3])
 
+        # filter by min_afdw and min_epa
+        potential_harvests_df = potential_harvests_df[(potential_harvests_df['Filter AFDW'] >= min_afdw) & (potential_harvests_df['epa_val'] >= min_epa)]
+        
         # drop empty rows (rows with no 'harvestable_mass')
         potential_harvests_df = potential_harvests_df[(potential_harvests_df['harvestable_mass_nanno_corrected'] != 0) & (~pd.isna(potential_harvests_df['harvestable_mass_nanno_corrected']))]
         
         # calculate "Drop To" (current pond level less the "harvestable_depth_inches")
         potential_harvests_df['Drop To'] = potential_harvests_df['Depth'] - potential_harvests_df['harvestable_depth_inches']
-        potential_harvests_df['Days Since Harvested'] = '' # TODO need to implement into DB...
 
         # sort by Column id (ascending) then by 'days since harvested' (desc) then by harvestable mass (desc)
-        potential_harvests_df = potential_harvests_df.sort_values(by=['Column', 'Days Since Harvested', 'harvestable_mass_nanno_corrected'], ascending=[True, False, False])
+        potential_harvests_df = potential_harvests_df.sort_values(by=['Column', 'days_since_harvested_split', 'harvestable_mass_nanno_corrected'], ascending=[True, False, False])
 
         # compute running sums for each column
         h_cols = potential_harvests_df['Column'].unique()
@@ -795,10 +804,14 @@ class PondsOverviewPlots:
             potential_harvests_df['Running Total Mass'] = None
             
         # rename columns for table display
-        potential_harvests_df = potential_harvests_df.rename(columns={'PondID': 'Pond ID', 'harvestable_depth_inches': 'Harvestable Inches', 'harvestable_mass_nanno_corrected': 'Harvestable Mass', 'harvestable_gallons': 'Harvestable Gallons'})
+        potential_harvests_df = potential_harvests_df.rename(columns={'PondID': 'Pond ID', 
+                                                                      'harvestable_depth_inches': 'Harvestable Inches', 
+                                                                      'harvestable_mass_nanno_corrected': 'Harvestable Mass', 
+                                                                      'harvestable_gallons': 'Harvestable Gallons',
+                                                                      'days_since_harvested_split': 'Days Since Harvested/Split'})
 
         # re-order columns for table display
-        potential_harvests_df = potential_harvests_df[['Column', 'Pond ID', 'Drop To', 'Days Since Harvested', 'Harvestable Inches', 'Harvestable Gallons', 'Harvestable Mass', 'Running Total Gallons', 'Running Total Mass']]
+        potential_harvests_df = potential_harvests_df[['Column', 'Pond ID', 'Drop To', 'Days Since Harvested/Split', 'Harvestable Inches', 'Harvestable Gallons', 'Harvestable Mass', 'Running Total Gallons', 'Running Total Mass']]
 
         # calc aggregates
         total_harvestable_mass = potential_harvests_df['Harvestable Mass'].sum()
@@ -806,7 +819,7 @@ class PondsOverviewPlots:
         
         # format column data for table display
         potential_harvests_df['Drop To'] = potential_harvests_df['Drop To'].apply(lambda x: f'{x}"')
-        #potential_harvests_df['Days Since Harvested'] = potential_harvests_df['Days Since Harvested'].apply(lambda x: f'{x} days') # TODO uncomment after updating DB with field
+        potential_harvests_df['Days Since Harvested/Split'] = potential_harvests_df['Days Since Harvested/Split'].apply(lambda x: f'{x} days') 
         potential_harvests_df['Harvestable Inches'] = potential_harvests_df["Harvestable Inches"].apply(lambda x: f'{x}"')
         potential_harvests_df['Harvestable Gallons'] = potential_harvests_df["Harvestable Gallons"].apply(lambda x: f'{x:,.0f} gal')
         potential_harvests_df['Harvestable Mass'] = potential_harvests_df['Harvestable Mass'].apply(lambda x: f'{x:,.0f} kg')
@@ -835,7 +848,7 @@ class PondsOverviewPlots:
                 fig, ax, y_align = gen_fig()
                 y_align = plot_table(table_title_id=column_id, ax=ax, y_start=y_align)
             y_align -= overall_spacing
-        #plt.show() # show plot for testing in jupyter nb
+        plt.show() # show plot for testing in jupyter nb
         fig_list.append(fig)     
 
         filename = f'./output_files/Potential Harvests {select_date.strftime("%Y-%m-%d")}.pdf'

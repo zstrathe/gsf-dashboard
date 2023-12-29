@@ -46,7 +46,7 @@ class Dataloader:
         while data_etl_queue:
             data_etl_class_obj = data_etl_queue.pop(0) # get first item in queue & remove it
             class_vars = vars(data_etl_class_obj)
-            if 'DEPENDENCY_CLASSES' in class_vars:
+            if 'DEPENDENCY_CLASSES' in class_vars and class_vars['DEPENDENCY_CLASSES'] != None:
                 dep_classes = class_vars['DEPENDENCY_CLASSES'] # list of class names (strings)
                 reset_queue_flag = False
                 for c in dep_classes:
@@ -61,6 +61,7 @@ class Dataloader:
                 if reset_queue_flag:
                     continue
             print('\n*** Running:', data_etl_class_obj.__name__, '***') 
+            # init/run the data class object
             data_etl_class_obj(**param_kwargs)
             completed_etl_name_list.append(data_etl_class_obj.__name__)
        
@@ -99,6 +100,25 @@ class Dataloader:
         init_tables()
         rebuild_db_run(start_date, end_date)
 
+    def rebuild_data_class(self, class_name: str) -> None:
+        '''
+        TODO: 
+            - get dependent classes from data class 
+            - get existing data date range and use for rebuilding
+                - add params for specifying dates
+                - if existing data doesn't exist, throw exception unless dates specified
+        '''
+        
+        try:
+            data_class_obj = globals().get(class_name)
+        except:
+            raise Exception(f'Could not get class name: {class_name}! Wrong name provided?')
+        param_kwargs = {'db_engine': self.db_engine, 
+                        'run_date_start': datetime(2023,9,1), 
+                        'run_date_end': datetime(2023,12,28)}
+        # init/run the data class object
+        data_class_obj(**param_kwargs)
+    
     def _update_existing_db_new_tables(self) -> None:
         db_schema_files = [f.name.split('.')[0] for f in Path().glob("settings/db_schemas/*.create_table")]
         for table_name in db_schema_files:
@@ -538,7 +558,7 @@ class EPALoad(DBColumnsBase):
         # get list of all columns that should be forward filled by checking exclusion list
         fill_columns = [col for col in out_df.columns if col not in ('Date', 'PondID', 'epa_actual_measurement')]
 
-        # query dates when ponds were completely emptied / harvested completely, so to use as hard "reset points" in epa_data when forward filling in for dates in between readings
+        # query 'active_status' to get dates when ponds were completely emptied / harvested completely, so to use as hard "reset points" in epa_data when forward filling in for dates in between readings
         active_pond_dates_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
                                                                 table_name='ponds_data_calculated', 
                                                                 query_date_start=out_df['Date'].min(), # use the first date from the epa data / this will likely error out, but query should get first available data with "check_safe_date=True" 
@@ -906,6 +926,8 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         # join the queried dataframes
         calc_df = pd.merge(ref_df1, ref_df2, on=['Date', 'PondID'], how='outer')
 
+        calc_df.to_excel('test_output_of_pond_data_before_growth_calc.xlsx', index=False)
+        
         # set index as Date so that df.rolling() and df.shift() functions will work with days (to handle gaps in ponds being active)
         calc_df = calc_df.set_index('Date') 
         for pond_id in calc_df['PondID'].unique():
@@ -1068,7 +1090,7 @@ class CalcHarvestedSplit(DBColumnsBase):
     def _calc_harvested_split(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         df_ref_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Split Innoculum'])
         df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=None)
-       
+           
         output_df = df_data_calcs.copy()
         for pond_id in output_df['PondID'].unique():
             # get df mask with only values for specific PondID
@@ -1119,11 +1141,56 @@ class CalcHarvestedSplit(DBColumnsBase):
                                 if next_day_mass_change > 0:
                                     return_dict[update_key] = next_day_mass_change
                 return return_dict
-                
             output_df.loc[mask, ['H/S', 'est_harvested', 'est_split']] = output_df.loc[mask, :].apply(lambda x: _get_h_s_amount(x), axis=1, result_type='expand')
+            
         output_df = output_df.drop([col for col in output_df.columns if '_tmp_' in col], axis=1)
         return output_df
 
+class CalcDaysSinceHarvestedSplit(DBColumnsBase):
+    OUT_TABLE_NAME = 'ponds_data_calculated'
+    DEPENDENCY_CLASSES = ['GetActiveStatus', 'DailyDataLoad', 'MassVolumeHarvestableCalculations', 'CalcHarvestedSplit'] 
+   
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    def run(self):
+        dhs_df = self._calc_days_since_harvest_split(start_date=self.run_date_start, end_date=self.run_date_end) 
+
+        # update the db (calling a function from .db_utils.py)
+        update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=dhs_df)
+    
+    def _calc_days_since_harvest_split(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        # get ref data and add an additional 45 days of padding (excessive??) for looking back 
+        # use check_safe_date arg for query function so that no error is thrown if start_date is prior to DB records
+        ref_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                     table_name='ponds_data_calculated', 
+                                                     query_date_start=start_date-pd.Timedelta(days=45), 
+                                                     query_date_end=end_date, 
+                                                     col_names=['active_status', 'H/S'],
+                                                     check_safe_date=True)
+        out_df = ref_df[['Date', 'PondID']]
+        # set index to Date so for updating data from a temp df, so that Date-index serves as "key" column to join data on
+        out_df = out_df.set_index('Date')
+
+        # get a column of 1's where active_status==True and no ['H', 'S', 'HC'] in the 'H/S' column
+        ref_df['_active_and_not_harvested_split'] = ref_df.apply(lambda row: 1 if row['active_status'] == True and (pd.isna(row['H/S']) or row['H/S'] not in ['H', 'S', 'HC']) else None, axis=1)
+        
+        # get cumulative sum for concurrent days of active_status=True and not harvested/split
+        # ref for reset df cumsum() with None row vals: https://stackoverflow.com/questions/55147225/pandas-dataframe-cumsum-reset-on-nan
+        for pond_id in ref_df['PondID'].unique():
+            _tmp_df = ref_df[ref_df['PondID'] == pond_id].copy().set_index('Date')
+            _tmp_df['days_since_harvested_split'] = _tmp_df['_active_and_not_harvested_split'].groupby(_tmp_df['_active_and_not_harvested_split'].isna().cumsum()).cumsum().fillna(0, downcast='infer')
+            # update 'days_since_harvest' in out_df for pond_id           
+            out_df.loc[out_df['PondID'] == pond_id, 'days_since_harvested_split'] = _tmp_df['days_since_harvested_split']
+
+        # reset index of out_df so that 'Date' is a column again
+        out_df = out_df.reset_index()
+        
+        # filter dates to the param dates (remove the extra 45 days of data added to beginning of query)
+        out_df = out_df[out_df['Date'].between(start_date, end_date)]
+        
+        return out_df[['Date', 'PondID', 'days_since_harvested_split']]
+               
 class GetPondHealthStatusCode(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
     DEPENDENCY_CLASSES = ['DailyDataLoad', 'GetActiveStatus', 'EPALoad'] # define class dependency that needs to be run prior to an instance of this class
@@ -1215,6 +1282,7 @@ class ChemicalUsageLoad(DBColumnsBase):
 
 class WeatherDataLoad(DBColumnsBase):
     OUT_TABLE_NAME = 'daily_weather_data'
+    DEPENDENCY_CLASSES = None
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1242,6 +1310,7 @@ class WeatherDataLoad(DBColumnsBase):
 
 class ProcessingDataLoad(DBColumnsBase):
     OUT_TABLE_NAME = 'daily_processing_data'
+    DEPENDENCY_CLASSES = None
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
