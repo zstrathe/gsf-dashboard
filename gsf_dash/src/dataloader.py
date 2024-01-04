@@ -8,10 +8,9 @@ import math
 from dateutil.rrule import rrule, DAILY 
 from datetime import datetime, date
 from pathlib import Path
-from . import load_setting 
 from .ms_account_connect import MSAccount, M365ExcelFileHandler
 from .db_utils import * 
-from .utils import redirect_logging_to_file
+from .utils import load_setting, redirect_logging_to_file
 
 class Dataloader:
     def __init__(self, run_date: str|None, db_engine_name: str = 'gsf_data'):

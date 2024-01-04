@@ -848,7 +848,7 @@ class PondsOverviewPlots:
                 fig, ax, y_align = gen_fig()
                 y_align = plot_table(table_title_id=column_id, ax=ax, y_start=y_align)
             y_align -= overall_spacing
-        plt.show() # show plot for testing in jupyter nb
+        #plt.show() # show plot for testing in jupyter nb
         fig_list.append(fig)     
 
         filename = f'./output_files/Potential Harvests {select_date.strftime("%Y-%m-%d")}.pdf'

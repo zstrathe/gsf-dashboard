@@ -9,7 +9,7 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse, Rectangle
-from . import generate_multipage_pdf
+from .utils import generate_multipage_pdf
 from .db_utils import query_data_table_by_date, query_data_table_by_date_range
 
 class BaseReportProperties:
