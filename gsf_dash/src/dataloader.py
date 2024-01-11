@@ -622,7 +622,7 @@ class EPALoad(DBColumnsBase):
         row_process_kwargs = {}
         
         # check which file is being loaded (2 different sources currently)
-        if 'epa_data_primary.xlsx' in excel_filename.__repr__(): # checking if this is the primary data source 
+        if 'epa_data_primary' in excel_filename.__repr__(): # checking if this is the primary data source 
             print('Processing primary epa file')
             # parse the first 4 columns to update header (since excel file col headers are on different rows/merged rows)
             epa_df.iloc[0:4] = epa_df.iloc[0:4].fillna(method='bfill', axis=0) # backfill empty header rows in the first 4 header rows, results in header info copied to first row for all cols
@@ -631,7 +631,7 @@ class EPALoad(DBColumnsBase):
             epa_df = epa_df.iloc[4:] # delete the now unnecessary/duplicate rows of header data
             epa_df = epa_df[['Sample type', 'EPA % AFDW', 'EPA % of Total FA']]
             
-        elif 'epa_data_secondary.xlsx' in excel_filename.__repr__(): #chck if it's the secondary data source
+        elif 'epa_data_secondary' in excel_filename.__repr__(): #chck if it's the secondary data source
             # not currently using a secondary source
             pass
         else:
@@ -944,8 +944,6 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         # join the queried dataframes
         calc_df = pd.merge(ref_df1, ref_df2, on=['Date', 'PondID'], how='outer')
 
-        calc_df.to_excel('test_output_of_pond_data_before_growth_calc.xlsx', index=False)
-        
         # set index as Date so that df.rolling() and df.shift() functions will work with days (to handle gaps in ponds being active)
         calc_df = calc_df.set_index('Date') 
         for pond_id in calc_df['PondID'].unique():
@@ -1043,10 +1041,10 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         # reset index so that 'Date' is a column again
         calc_df = calc_df.reset_index()
 
-        calc_df.to_excel('test_growth_per_pond.xlsx', index=False)
-
         # filter output to include rows only greater than the parameter start_date (since it is overridden to a min of 14 days for calculations to work)
         calc_df = calc_df[calc_df['Date'] >= _param_start_date]
+
+        calc_df.to_excel('test_growth_per_pond_rev3.xlsx', index=False)
 
         # filter to output columns
         calc_df = calc_df[['Date', 'PondID', 'growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d', 'running_avg_growth_5d', 'running_avg_norm_growth_5d', 'running_avg_growth_14d', 'running_avg_norm_growth_14d']]
