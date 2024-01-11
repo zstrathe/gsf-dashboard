@@ -391,12 +391,6 @@ class M365ExcelFileHandler:
                         if col_idx in dt_cols:
                             dt_cols.pop(col_idx)
             
-            # def convert_dt_or_pass(pandas_cell_val):
-            #     try:
-            #         return pd.to_datetime(pandas_cell_val, unit='d', origin='1899-12-30')
-            #     except:
-            #         return None
-            
             for col in dt_cols:
                 # use .apply rather than applying to_datetime to the entire column at once
                 # do this to handle each row separately & pass on rows that don't conform
@@ -545,15 +539,6 @@ class M365ExcelFileHandler:
                     # since an empty bound has been found, then backtrack high bound by half the difference bwtween high and low bounds /
                     # to gradually narrow the search band for the last nonempty row
                     row_search_high = ((row_search_high - row_search_low)/2).__floor__() + row_search_low
-
-    
-    # def _get_column_mapping_api(self, sheet: Type['O365.excel.WorkSheet']):
-    #     '''
-    #     Get column mapping (col number to alphabetic, and alphabetic to col number) for by checking for data in the first row
-    #     Checks 5000 columns...maybe excessive
-    #     '''
-    #     col_to_name_map = {self._convert_numeric_col_to_alphabetic(idx):col_name for (idx, col_name) in enumerate(sheet.get_range(f'A1:{self._convert_numeric_col_to_alphabetic(5000)}1').values[0], start=1) if col_name != ''}
-    #     return col_to_name_map
      
     def _convert_numeric_col_to_alphabetic(self, col_number):
         '''
@@ -599,29 +584,6 @@ class EmailHandler:
     
     def __init__(self):
         self.account = MSAccount().account_connection
-        #self.account = self.authenticate()
-        
-        # set permission list of file extensions to look for when extracting files from emails
-        # currently only looking for excel files
-        #self.good_attachment_types = ['xlsx', 'xls', 'xlsm']
-        
-    # def _auth_func(account, scopes):
-    #     account.authenticate(scopes)
-    
-    # def authenticate(self):
-    #     def _auth_func(account):
-    #         account.authenticate(scopes=['basic', 'message_all'])
-        
-    #     email_settings = load_setting('email_cred')
-    #     credentials, tenant = (email_settings['client_id'], email_settings['client_secret']), email_settings['tenant']
-    #     token_backend = FileSystemTokenBackend(token_path='./settings/auth_data/', token_filename='outlook_auth_token.txt') # save token for email auth to re-use 
-    #     account = Account(credentials, auth_flow_type='authorization', tenant_id=tenant, token_backend=token_backend)
-    #     if not account.is_authenticated:  # will check if there is a token and has not expired
-    #         # ask for a login 
-    #         account.authenticate(scopes=['basic', 'message_all'])
-    #         #_auth_func(account)
-    #     print('Authenticated email account successfully!')
-    #     return account
     
     def send_email(self, recipients, subject, msg_body, attachments=[]):
         message = self.account.mailbox().new_message()
