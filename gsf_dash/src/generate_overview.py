@@ -12,10 +12,10 @@ from .utils import generate_multipage_pdf
 from .db_utils import query_data_table_by_date_range
 
 class PondsOverviewPlots:
-    def __init__(self, select_date, run=True, save_output=True): 
+    def __init__(self, select_date, source_db='gsf_data', run=True, save_output=True): 
         self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
         self.save_output = save_output
-
+        self.source_db = source_db
         if run:
             self.output_filenames = [] # initialize a list to collect output filenames
             [self.output_filenames.append(x) for x in (self.plot_scorecard(), self.plot_potential_harvests(), self.plot_epa())] 
@@ -312,26 +312,26 @@ class PondsOverviewPlots:
         ##############################
 
         # query epa data from db table
-        epa_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        epa_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                 table_name='epa_data', 
                                                 query_date_start=self.select_date, 
                                                 query_date_end=self.select_date, 
                                                 col_names=['epa_val', 'measurement_date_actual'])
 
         # query pest/health indicators data
-        indicators_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        indicators_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                        table_name='ponds_data', 
                                                        query_date_start=self.select_date, 
                                                        query_date_end=self.select_date, 
                                                        col_names=['% Nanno', 'Handheld pH', 'Rotifers', 'Attached FD111', 'Free Floating FD111', 'Golden Flagellates', 'Diatoms', 'Tetra', 'Green Algae']) 
 
         # query measurements data
-        measurements_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        measurements_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='ponds_data', 
                                                          query_date_start=self.select_date-pd.Timedelta(days=1), 
                                                          query_date_end=self.select_date, 
                                                          col_names=['Depth', 'Filter AFDW', 'Column']) 
-        _tmp_calculated_query_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        _tmp_calculated_query_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                                   table_name='ponds_data_calculated', 
                                                                   query_date_start=self.select_date-pd.Timedelta(days=1), 
                                                                   query_date_end=self.select_date, 
@@ -388,7 +388,7 @@ class PondsOverviewPlots:
                     
         # query df just for using to determine on what date a pond was last harvested, if ever
         # look back 90 days for data
-        harvest_idx_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        harvest_idx_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                         table_name='ponds_data', 
                                                         query_date_start=self.select_date-pd.Timedelta(days=90), 
                                                         query_date_end=self.select_date, 
@@ -583,7 +583,7 @@ class PondsOverviewPlots:
                     ''' 
                     Plot growth rate info
                     '''
-                    growth_data = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+                    growth_data = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='ponds_data_aggregate', 
                                                          query_date_start=self.select_date, 
                                                          query_date_end=self.select_date, 
@@ -646,7 +646,7 @@ class PondsOverviewPlots:
                     ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
 
                     #prev_date_data = self.processing_dataframe.loc[prev_date]
-                    prev_date_processing_data = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+                    prev_date_processing_data = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='daily_processing_data', 
                                                          query_date_start=self.select_date-pd.Timedelta(days=1), 
                                                          query_date_end=self.select_date-pd.Timedelta(days=1)).iloc[0] 
@@ -760,17 +760,17 @@ class PondsOverviewPlots:
         select_date = self.select_date
 
         # query potential harvest data and pre-process (get running sums by 'column')
-        df1 = potential_harvests_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        df1 = potential_harvests_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='ponds_data', 
                                                          query_date_start=self.select_date, 
                                                          query_date_end=self.select_date,
                                                          col_names=['Depth', 'Column', 'Filter AFDW'])
-        df2 = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        df2 = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='ponds_data_calculated', 
                                                          query_date_start=self.select_date, 
                                                          query_date_end=self.select_date,
                                                          col_names=['harvestable_depth_inches', 'harvestable_gallons', 'harvestable_mass_nanno_corrected', 'days_since_harvested_split'])
-        df3 = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        df3 = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='epa_data', 
                                                          query_date_start=self.select_date, 
                                                          query_date_end=self.select_date,
@@ -857,7 +857,7 @@ class PondsOverviewPlots:
 
     def plot_epa(self, plot_title='Pond EPA Overview'):
         def _load_epa_dict():
-            epa_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+            epa_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                     table_name='epa_data', 
                                                     query_date_start=self.select_date-pd.Timedelta(days=90), 
                                                     query_date_end=self.select_date, 
@@ -1018,7 +1018,7 @@ class PondsOverviewPlots:
         _epa_dict = _load_epa_dict()
 
         # load active_status
-        active_status_df = query_data_table_by_date_range(db_name_or_engine='gsf_data', 
+        active_status_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                           table_name='ponds_data_calculated', 
                                                           query_date_start=self.select_date, 
                                                           query_date_end=self.select_date, 
