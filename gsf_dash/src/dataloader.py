@@ -1135,7 +1135,7 @@ class CalcHarvestedSplitMass(DBColumnsBase):
                                                       table_name='ponds_data', 
                                                       query_date_start=start_date-pd.Timedelta(days=5), 
                                                       query_date_end=end_date, 
-                                                      col_names=['Filter AFDW', 'harvest_volume', 'split_volume_out'], 
+                                                      col_names=['Filter AFDW', '% Nanno', 'harvest_volume', 'split_volume_out'], 
                                                       check_safe_date=True)
         df_active = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
                                                       table_name='ponds_data_calculated', 
@@ -1149,30 +1149,37 @@ class CalcHarvestedSplitMass(DBColumnsBase):
         GALLONS_TO_LITERS = 3.78541
 
         # add a placeholder string for 'Inactive' dates so that they don't get filled in next step
+        # can't just filter out inactive dates or data will be carried over between period of inactivity
         df_harvested.loc[df_harvested['active_status'] == False, 'Filter AFDW'] = '_tmp_placeholder_for_inactive'
         
         # fill afdw data for missing days (weekends, etc)
         for pond_id in self.ponds_list:
             mask = df_harvested['PondID'] == pond_id
-            fill_cols = ['Filter AFDW']
+            fill_cols = ['Filter AFDW', '% Nanno']
             # .bfill() and ffill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with forward filling so ensure that 5 day limit is applied
             # first, for any missing vals where a harvest or split has been calculated, then replace those vals with a temporary placeholder string
             tmp_placeholder_mask = (df_harvested['PondID'] == pond_id) & ((df_harvested['harvest_volume'] > 0) | (df_harvested['split_volume_out'] > 0)) & ((pd.isna(df_harvested['Filter AFDW'])) | (~pd.isna(df_harvested['Filter AFDW'])))
-            df_harvested.loc[tmp_placeholder_mask, 'Filter AFDW'] = '_tmp_placeholder_for_ffill'
+            df_harvested.loc[tmp_placeholder_mask, fill_cols] = '_tmp_placeholder_for_ffill'
             
             # second, backfill values (so that the placeholder string blocks filling back to the date of harvest/split
-            df_harvested.loc[mask, 'Filter AFDW'] = df_harvested.loc[mask, 'Filter AFDW'].bfill(limit=5)
+            df_harvested.loc[mask, fill_cols] = df_harvested.loc[mask, fill_cols].bfill(limit=5)
            
             # third, replace placeholder strings, then forward fill any remaining missing values 
-            df_harvested.loc[mask, 'Filter AFDW'] = df_harvested.loc[mask, 'Filter AFDW'].replace('_tmp_placeholder_for_ffill', None)
-            df_harvested.loc[mask, 'Filter AFDW'] = df_harvested.loc[mask, 'Filter AFDW'].ffill(limit=5)
+            df_harvested.loc[mask, fill_cols] = df_harvested.loc[mask, fill_cols].replace('_tmp_placeholder_for_ffill', None)
+            df_harvested.loc[mask, fill_cols] = df_harvested.loc[mask, fill_cols].ffill(limit=5)
         
         # remove placeholder for inactive dates
         df_harvested.loc[df_harvested['active_status'] == False, fill_cols] = None
 
+        df_harvested = df_harvested[df_harvested['active_status'] == True]
+        
+        # convert % Nanno column from str to float
+        df_harvested['Filter AFDW'] = pd.to_numeric(df_harvested['Filter AFDW'], errors='coerce')
+        df_harvested['% Nanno'] = pd.to_numeric(df_harvested['% Nanno'], errors='coerce') / 100
+        
         # calculate est_harvested in Kg for
         # AFDW units = g/L, so convert harvested gallons to liters, then multiply by the AFDW. Divide result by 1000 for Kg
-        df_harvested['est_harvested'] = (df_harvested['Filter AFDW'] * df_harvested['harvest_volume'] * GALLONS_TO_LITERS) / 1000    
+        df_harvested['est_harvested'] = (df_harvested['Filter AFDW'] * df_harvested['% Nanno'] * df_harvested['harvest_volume'] * GALLONS_TO_LITERS) / 1000    
         df_harvested['est_split_out'] = None # TODO add est_split_out calc after split volumes added to DB
 
         # filter to the output date range
