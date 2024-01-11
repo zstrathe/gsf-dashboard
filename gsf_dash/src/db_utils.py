@@ -66,10 +66,26 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
     if len(update_data_df) == 0:
         print('No data, skipping DB update...')
         return False
+
+    # Start with a "base_df" to ensure that a row every Date & PondID combination (or Date only) is included in the db
+    date_min = update_data_df['Date'].min()
+    date_max = update_data_df['Date'].max()
+    date_range = pd.date_range(date_min, date_max)
+    if 'PondID' in pk_cols:
+        pond_ids_list = update_data_df['PondID'].unique()
+        # generate combinations of each date and PondID
+        lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, pond_ids_list])
+        all_dates_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
+    else:
+        all_dates_df = pd.DataFrame(date_range, columns=['Date'])
     
+    # merge missing dates with update_data, if length longer (otherwise do nothing to save processing a df join)
+    if len(all_dates_df) > len(update_data_df):
+        update_data_df = pd.merge(all_dates_df, update_data_df, how='outer', on=pk_cols)
+
     # convert Date column in update dataframe to string
     update_data_df = convert_df_date_cols(update_data_df, option='TO_STR')
-
+    
     # create temp table in database to update the target table from
     update_data_df.to_sql(name='__temp_table', con=db_engine, if_exists='replace', index=False)
     
@@ -106,7 +122,7 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
             print('Rows successfully updated:', update_result.rowcount)
             return True
         else:
-            print(f'Error updating table rows, number of row updates ({update_result.rowcount}) does not match source dataframe length ({len(update_data_df)})! Rolling back db transaction...')
+            print(f'Error updating table rows, number of row updates ({update_result.rowcount}) does not match source dataframe length ({len(update_data_df)})! Possibly due to duplicate rows? Rolling back db transaction...')
             conn.rollback()
             return False
  
@@ -262,7 +278,6 @@ def convert_df_date_cols(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.Dat
         
     return df
         
-
 def check_active_query(db_engine: sqlalchemy.Engine, pond_id: str, check_date: str, num_prior_days_to_check: int = 5) -> None:
     check_date = datetime.strptime(check_date, '%Y-%m-%d')
     earliest_check_date = check_date - timedelta(days=num_prior_days_to_check)
