@@ -52,8 +52,8 @@ class Dataloader:
                     if not c in completed_etl_name_list:
                         print(f'Detected dependency class needed, cannot run: {data_etl_class_obj.__name__}. Re-appending to end of processing queue!')
                         reset_queue_counter[data_etl_class_obj.__name__] += 1
-                        if reset_queue_counter[data_etl_class_obj.__name__] > 1:
-                            raise Exception(f'ERROR: could not run process name: [{data_etl_class_obj.__name__}] for run date: [{run_date.strftime("%Y-%m-%d")}], due to dependency process: [{c}] not existing??')
+                        if reset_queue_counter[data_etl_class_obj.__name__] > 5: # testing arbitrary limit to retry running a class...
+                            raise Exception(f'ERROR: could not run process name: [{data_etl_class_obj.__name__}] for run dates: [{run_date_start.strftime("%Y-%m-%d")} - {run_date_end.strftime("%Y-%m-%d")}], due to dependency process: [{c}] not existing??')
                         data_etl_queue.append(data_etl_class_obj)
                         reset_queue_flag = True
                         break
@@ -209,6 +209,7 @@ class DailyDataLoad(DBColumnsBase):
     Load primary ponds data into 'ponds_data' table 
     '''
     OUT_TABLE_NAME = 'ponds_data'
+    DEPENDENCY_CLASSES = None
     
     def __init__(self, *args, **kwargs):
         self.OUT_TABLE_NAME = 'ponds_data'
@@ -218,11 +219,12 @@ class DailyDataLoad(DBColumnsBase):
 
     def run(self):
         daily_data_dfs = []
-        # Start with a "base_df" to ensure that a row every Date & PondID combination is included in the db, even if no data is found
-        date_range = pd.date_range(self.run_date_start, self.run_date_end) # .map(lambda x: x.strftime('%Y-%m-%d')
-        lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, self.ponds_list])
-        base_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
-        daily_data_dfs.append(base_df)
+        
+        # # Start with a "base_df" to ensure that a row every Date & PondID combination is included in the db, even if no data is found
+        # date_range = pd.date_range(self.run_date_start, self.run_date_end) # .map(lambda x: x.strftime('%Y-%m-%d')
+        # lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, self.ponds_list])
+        # base_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
+        # daily_data_dfs.append(base_df)
 
         # Call method to process and load into db the daily data files 
         daily_data_dfs.append(self._load_daily_data_date_range(dt_start=self.run_date_start, dt_end=self.run_date_end))
@@ -385,7 +387,7 @@ class DailyDataLoad(DBColumnsBase):
         RETURNS -> pd.ExcelFile object (if successful download) or None (if failure)
         '''
         specify_date = self.run_date if specify_date == '' else datetime.strptime(specify_date, "%Y-%m-%d")
-        folder_id = load_setting('daily_data_info')['folder_id']
+        folder_id = load_setting('folder_ids')['daily_data']
         for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
             # first look for the "year" directory
             if year_dir.name == str(specify_date.year): 
@@ -411,6 +413,7 @@ class DailyDataLoad(DBColumnsBase):
                                         download_attempts -= 1
                                         if download_attempts > 0:
                                             print('Waiting 5 seconds to try download again...')
+                                            import time
                                             time.sleep(5)
                                             continue
                                         else:
@@ -424,6 +427,7 @@ class ScorecardDataLoad(DBColumnsBase):
     Load scorecard data into 'ponds_data' table 
     '''
     OUT_TABLE_NAME = 'ponds_data'
+    DEPENDENCY_CLASSES = None
     
     def __init__(self, *args, **kwargs):
     
@@ -444,8 +448,12 @@ class ScorecardDataLoad(DBColumnsBase):
             print('Loading scorecard file...')
             file_id = load_setting('file_ids').get('scorecard')
             sc_file = M365ExcelFileHandler(file_object_id=file_id, load_data=True, data_get_method='DL', ignore_sheets=['Analysis', 'Template', 'Notes', 'SUBSTRING[(old)]', 'SUBSTRING[HRP]'])
-    
+
+            # define the columns to return from when loading
             include_columns = ['Date', 'Comments', 'Split Innoculum']
+            
+            # because data for each pond is on a separate sheet, iterate through sheets (named by PondID) and get a df for each
+            # then append each df to all_df_list, and finally concatenate into a single df by row
             all_df_list = []
             for pond_id in self.ponds_list:
                 try: 
@@ -473,6 +481,7 @@ class CO2UsageLoad(DBColumnsBase):
     Load co2 consumption data into 'co2_usage' table
     '''
     OUT_TABLE_NAME = 'co2_usage'
+    DEPENDENCY_CLASSES = None
     
     def __init__(self, *args, **kwargs):
         # init as base class 
@@ -877,14 +886,14 @@ class MassVolumeHarvestableCalculations(DBColumnsBase):
 
 class CalcMassGrowthPerPond(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
-    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus', 'CalcHarvestedSplit'] # define class dependency that needs to be run prior to an instance of this class
+    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus', 'CalcHarvestedSplitMass'] # define class dependency that needs to be run prior to an instance of this class
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
     def run(self):
         growth_df = self._calc_growth(self.run_date_start, self.run_date_end)
-      
+        
         # update the db (calling a function from .db_utils.py)
         update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=growth_df)
     
@@ -895,14 +904,19 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             - week-to-week growth: 7 days lookback
             - daily rolling average: 14 days of week-to-week growth data
         '''
-        # check if date range provided is at least 26, else override start_date param
+        # check if date range provided is at least 26 days, else override start_date param
         _param_start_date = start_date
         if (end_date - start_date).days < 26:
             start_date = end_date - pd.Timedelta(days=26)
   
-        # query data to calculate 'liters' (from depth) 
-        # and 'normalized liters' by converting liters with conversion factor (ratio of 'Filter AFDW' value compared to 0.50)
-        ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Filter AFDW', 'Depth'], check_safe_date=True)
+        # query data to calculate 'liters' from 'Depth' (which val is in inches), 
+        # and calculate 'normalized liters' by converting liters with conversion factor (ratio of 'Filter AFDW' value compared to 0.50)
+        ref_df1 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                 table_name='ponds_data', 
+                                                 query_date_start=start_date, 
+                                                 query_date_end=end_date, 
+                                                 col_names=['Filter AFDW', 'Depth'], 
+                                                 check_safe_date=True)
 
         # if either 'Filter AFDW' or 'Depth' value is missing for any date, then replace both with None
         # because without both the row is not a good reference for measuring growth
@@ -920,7 +934,12 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         ref_df1['normalized_liters'] = ref_df1['liters'] * ref_df1['afdw_norm_factor']
 
         # query calculated fields further used in this calculation
-        ref_df2 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['active_status', 'est_harvested', 'est_split', 'calc_mass_nanno_corrected'], check_safe_date=True)
+        ref_df2 = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                 table_name='ponds_data_calculated', 
+                                                 query_date_start=start_date, 
+                                                 query_date_end=end_date, 
+                                                 col_names=['active_status', 'est_harvested', 'est_split_in', 'est_split_out', 'calc_mass_nanno_corrected'], 
+                                                 check_safe_date=True)
 
         # join the queried dataframes
         calc_df = pd.merge(ref_df1, ref_df2, on=['Date', 'PondID'], how='outer')
@@ -952,12 +971,12 @@ class CalcMassGrowthPerPond(DBColumnsBase):
 
             # fill liters and mass data for missing days (weekends, etc)
             # .bfill() and ffill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with forward filling so ensure that 5 day limit is applied
-            # use a method similar to CalcHarvestedSplit for filling vals: 
-            # first, for any missing vals where a harvest or split has been calculated, then replace those vals with a temporary placeholder string
-            tmp_placeholder_mask = (calc_df['PondID'] == pond_id) & ((calc_df['est_harvested'] > 0) | (calc_df['est_split'] > 0)) & ((pd.isna(calc_df['calc_mass_nanno_corrected']) == True) | (calc_df['calc_mass_nanno_corrected'] == 0))
+            # first, for any missing vals where a harvest or split has been calculated: replace those vals with a temporary placeholder string
+            # # only check mass for checking the columns to fill, since a missing mass would also indicate missing liters/normalized liters
+            tmp_placeholder_mask = (calc_df['PondID'] == pond_id) & ((calc_df['est_harvested'] > 0) | (calc_df['est_split_out'] > 0)) & ((pd.isna(calc_df['calc_mass_nanno_corrected']) == True) | (calc_df['calc_mass_nanno_corrected'] == 0)) 
             calc_df.loc[tmp_placeholder_mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = '_tmp_placeholder_for_ffill'
             
-            # second, backfill values (so that the placeholder string blocks filling back to the date of harvest/split
+            # second, backfill values (filling stops when it hits a row with the placeholder string)
             calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = calc_df.loc[mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']].bfill(limit=5)
            
             # third, replace placeholder strings, then forward fill values 
@@ -968,10 +987,10 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # this is necessary because further steps perform row lookbacks, and need to ensure that data filled onto an inactive day isn't factored in
             mask = (calc_df['PondID'] == pond_id) & (calc_df['active_status'] == True) 
             
-            # get "harvest corrected (hc)" values for liters, normalized _liters, and calc_mass (next day val, if day has been noted as a harvest with a calculated harvest val > 0)
+            # get "harvest corrected (hc)" values for liters, normalized_liters, and calc_mass_nanno_corrected (next day val, if day has been noted as a harvest with a calculated est_harvested val > 0)
             # per Kurt, this is so that variance in pond levels and density is factored out of growth calcs
             def _get_harvest_corrected_val(row, col_name):
-                if (not pd.isna(row['est_harvested']) and row['est_harvested'] > 0) or (not pd.isna(row['est_split']) and row['est_split'] > 0):
+                if (not pd.isna(row['est_harvested']) and row['est_harvested'] > 0) or (not pd.isna(row['est_split_out']) and row['est_split_out'] > 0):
                     rval_df = calc_df.loc[mask, col_name].shift(-1, freq='D')  
                     if row.name in rval_df:
                         return rval_df.loc[row.name]
@@ -983,25 +1002,28 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             calc_df.loc[mask, 'hc_normalized_liters'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'normalized_liters'), axis=1)
             calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'calc_mass_nanno_corrected'), axis=1)
            
-            # fill in n/a values in 'est_harvested' and 'est_split' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
+            # fill in n/a values in 'est_harvested', 'est_split_in', and 'est_split_out' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
             calc_df.loc[mask, 'est_harvested'] = calc_df.loc[mask, 'est_harvested'].fillna(0) 
-            calc_df.loc[mask, 'est_split'] = calc_df.loc[mask, 'est_split'].fillna(0) 
+            calc_df.loc[mask, 'est_split_in'] = calc_df.loc[mask, 'est_split_out'].fillna(0)
+            calc_df.loc[mask, 'est_split_out'] = calc_df.loc[mask, 'est_split_out'].fillna(0) 
 
             # calculate rolling harvested amount for past 7-days
-            # since the 'calc_mass_nanno_corrected' includes the harvested amount for the day when harvested, then shift this rolling window by
-            # 1 day and actually only get a 6-day rolling sum (this ensures that harvests are not being double counted on the same day) 
-            calc_df.loc[mask, 'rolling_7d_harvested_mass'] = calc_df.loc[mask, 'est_harvested'].shift(1).rolling('6d').sum()
-            calc_df.loc[mask, 'rolling_7d_split_mass'] = calc_df.loc[mask, 'est_split'].shift(1).rolling('6d').sum()
+            # since the 'calc_mass_nanno_corrected' value on any day should be inclusive of the prior 6-days of activity (harvests/splits),
+            # and the calc_mass_nanno_corrected val does not reflect harvests/splits on that day (i.e., measurements are "generally" taken before these activities on any given day)
+            # then get a 6-day rolling sum of harvests and net splits which does not include the current day (by shifting by 1 day)
+            # without doing this, then harvests/splits would be double counted in the overall mass comparison
+            calc_df.loc[mask, 'rolling_7d_harvested_mass_out'] = calc_df.loc[mask, 'est_harvested'].shift(1).rolling('6d').sum()
+            calc_df.loc[mask, 'rolling_7d_split_net_mass_out'] = calc_df.loc[mask, 'est_split_out'].shift(1).rolling('6d').sum() - calc_df.loc[mask, 'est_split_in'].shift(1).rolling('6d').sum()
             
             # get the 'liters', 'normalized liters' from 7-days ago, using "harvest corrected" columns
-            calc_df.loc[mask, 'growth_ref_prev_liters_7d'] = calc_df.loc[mask, 'hc_liters'].shift(7, freq='D')
+            calc_df.loc[mask, 'growth_ref_prev_liters_7d'] = calc_df.loc[mask, 'hc_liters'].shift(7, freq='D') 
             calc_df.loc[mask, 'growth_ref_prev_norm_liters_7d'] = calc_df.loc[mask, 'hc_normalized_liters'].shift(7, freq='D')
 
             # get 'calc_mass' from 7-days ago for mass change calculation, using 'harvest corrected' values
             calc_df.loc[mask, 'mass_7d_prev'] = calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'].shift(7, freq='D')
             
             # calculate the net 7-day mass change in kg
-            calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = (calc_df.loc[mask, 'rolling_7d_harvested_mass'] + calc_df.loc[mask, 'rolling_7d_split_mass'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7d_prev'])
+            calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = (calc_df.loc[mask, 'rolling_7d_harvested_mass_out'] + calc_df.loc[mask, 'rolling_7d_split_net_mass_out'] + calc_df.loc[mask, 'calc_mass_nanno_corrected'] - calc_df.loc[mask, 'mass_7d_prev'])
             # filter out negative mass change (more than likely this is due to measurement errors)
             calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'] = calc_df.loc[mask, 'growth_ref_mass_change_kg_7d'].apply(lambda x: x if x > 0 else 0)
             # convert kilograms to grams for growth calc
@@ -1033,7 +1055,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         
 class CalcMassGrowthAggregate(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_aggregate'
-    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations', 'GetActiveStatus', 'CalcHarvestedSplit', 'CalcMassGrowthPerPond'] # define class dependency that needs to be run prior to an instance of this class
+    DEPENDENCY_CLASSES = ['CalcMassGrowthPerPond'] # define class dependency that needs to be run prior to an instance of this class
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1071,24 +1093,100 @@ class CalcMassGrowthAggregate(DBColumnsBase):
         # filter output to include rows only greater than the parameter start_date (since it is overridden to a min of 7 days for calculations to work)
         agg_growth_df = agg_growth_df[agg_growth_df['Date'] >= _param_start_date]
 
+        print(agg_growth_df)
         return agg_growth_df
 
-class CalcHarvestedSplit(DBColumnsBase):
+class CalcHarvestedSplitMass(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
-    DEPENDENCY_CLASSES = ['DailyDataLoad', 'MassVolumeHarvestableCalculations'] # define class dependency that needs to be run prior to an instance of this class
+    DEPENDENCY_CLASSES = ['DailyDataLoad', 'GetActiveStatus', 'HarvestDataLoad', 'MassVolumeHarvestableCalculations'] # TODO add Split data once it's added to db
    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
     def run(self):
-        hs_df = self._calc_harvested_split(start_date=self.run_date_start, end_date=self.run_date_end) # gets df with 'active_status' col
+        hs_df = self._calc_harvested_split_mass(start_date=self.run_date_start, end_date=self.run_date_end) # gets df with 'active_status' col
+        
+        backup_estimates_df = self._calc_harvested_split_mass_backup_estimate(start_date=self.run_date_start, end_date=self.run_date_end)
 
+        # merge and add backup estimated mass values where needed (i.e., wherever the backup method calculated an amount but nothing exists on the primary df)
+        hs_df = pd.merge(hs_df, backup_estimates_df, on=['Date', 'PondID'], how='outer')
+        
+        # get the previous and next est_harvested and est_split values for each date
+        # get these because, in some cases, the "backup" value is off by +-1 day, and would result in duplicate values
+        for pond_id in self.ponds_list:
+            pond_id_mask = hs_df['PondID'] == pond_id
+            hs_df.loc[pond_id_mask, ['prev_est_h', 'prev_est_s']] = hs_df.loc[pond_id_mask, ['est_harvested', 'est_split_out']].shift(1)
+            hs_df.loc[pond_id_mask, ['next_est_h', 'next_est_s']] = hs_df.loc[pond_id_mask, ['est_harvested', 'est_split_out']].shift(-1)
+        # if there is no value (for est_harvested and est_split_out) for the current day, previous day, and next day,
+        # then use the backup value (will be None unless a backup value exists)
+        hs_df['est_harvested'] = hs_df.apply(lambda row: row['est_harvested_backup'] if (pd.isna(row['est_harvested']) & pd.isna(row['prev_est_h']) & pd.isna(row['next_est_h'])) else row['est_harvested'], axis=1)
+        hs_df['est_split_out'] = hs_df.apply(lambda row: row['est_split_out_backup'] if (pd.isna(row['est_split_out']) & pd.isna(row['prev_est_s']) & pd.isna(row['next_est_s'])) else row['est_split_out'], axis=1)
+        
+        # filter to output columns
+        hs_df = hs_df[['Date', 'PondID', 'est_harvested', 'est_split_out']]
+        
         # update the db (calling a function from .db_utils.py)
         update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=hs_df)
-    
-    def _calc_harvested_split(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        
+    def _calc_harvested_split_mass(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        # query density and harvest volume (in gallons)
+        # add 5 days to beginning of query for additional data if needed to fill in missing values
+        df_harvested = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                      table_name='ponds_data', 
+                                                      query_date_start=start_date-pd.Timedelta(days=5), 
+                                                      query_date_end=end_date, 
+                                                      col_names=['Filter AFDW', 'harvest_volume', 'split_volume_out'], 
+                                                      check_safe_date=True)
+        df_active = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                      table_name='ponds_data_calculated', 
+                                                      query_date_start=start_date-pd.Timedelta(days=5), 
+                                                      query_date_end=end_date, 
+                                                      col_names=['active_status'], 
+                                                      check_safe_date=True)
+        df_harvested = pd.merge(df_harvested, df_active, on=['Date', 'PondID'], how='left')
+
+        # conversion factor for gal to L
+        GALLONS_TO_LITERS = 3.78541
+
+        # add a placeholder string for 'Inactive' dates so that they don't get filled in next step
+        df_harvested.loc[df_harvested['active_status'] == False, 'Filter AFDW'] = '_tmp_placeholder_for_inactive'
+        
+        # fill afdw data for missing days (weekends, etc)
+        for pond_id in self.ponds_list:
+            mask = df_harvested['PondID'] == pond_id
+            fill_cols = ['Filter AFDW']
+            # .bfill() and ffill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with forward filling so ensure that 5 day limit is applied
+            # first, for any missing vals where a harvest or split has been calculated, then replace those vals with a temporary placeholder string
+            tmp_placeholder_mask = (df_harvested['PondID'] == pond_id) & ((df_harvested['harvest_volume'] > 0) | (df_harvested['split_volume_out'] > 0)) & ((pd.isna(df_harvested['Filter AFDW'])) | (~pd.isna(df_harvested['Filter AFDW'])))
+            df_harvested.loc[tmp_placeholder_mask, 'Filter AFDW'] = '_tmp_placeholder_for_ffill'
+            
+            # second, backfill values (so that the placeholder string blocks filling back to the date of harvest/split
+            df_harvested.loc[mask, 'Filter AFDW'] = df_harvested.loc[mask, 'Filter AFDW'].bfill(limit=5)
+           
+            # third, replace placeholder strings, then forward fill any remaining missing values 
+            df_harvested.loc[mask, 'Filter AFDW'] = df_harvested.loc[mask, 'Filter AFDW'].replace('_tmp_placeholder_for_ffill', None)
+            df_harvested.loc[mask, 'Filter AFDW'] = df_harvested.loc[mask, 'Filter AFDW'].ffill(limit=5)
+        
+        # remove placeholder for inactive dates
+        df_harvested.loc[df_harvested['active_status'] == False, fill_cols] = None
+
+        # calculate est_harvested in Kg for
+        # AFDW units = g/L, so convert harvested gallons to liters, then multiply by the AFDW. Divide result by 1000 for Kg
+        df_harvested['est_harvested'] = (df_harvested['Filter AFDW'] * df_harvested['harvest_volume'] * GALLONS_TO_LITERS) / 1000    
+        df_harvested['est_split_out'] = None # TODO add est_split_out calc after split volumes added to DB
+
+        # filter to the output date range
+        df_harvested = df_harvested[df_harvested['Date'].between(start_date, end_date)]
+        
+        return df_harvested[['Date', 'PondID', 'est_harvested', 'est_split_out']]
+        
+    def _calc_harvested_split_mass_backup_estimate(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        '''
+        Method to get an estimate of harvested/split mass using the delta of calculated mass between two days
+        USING AS A BACKUP METHOD, FOR WHEN HARVESTED VOLUME DATA WAS ERRONEOUSLY NOT RECORDED
+        '''
         df_ref_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Split Innoculum'])
-        df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=None)
+        df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['calc_mass_nanno_corrected'])
            
         output_df = df_data_calcs.copy()
         for pond_id in output_df['PondID'].unique():
@@ -1102,7 +1200,6 @@ class CalcHarvestedSplit(DBColumnsBase):
             # first mark any values that are both missing and on day's marked as "H"/"S"/"I", as 'tmp_for_ffill'
             # then backfill all missing values 
             # then replace 'tmp_for_ffill' values with None, and forward fill those
-            ## TODO: look into a more efficient way to do this??
             output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, :].apply(lambda df_row: 'tmp_for_ffill' if (pd.isna(df_row['calc_mass_nanno_corrected'])) & (df_ref_data[(df_ref_data['PondID'] == df_row['PondID']) & (df_ref_data['Date'] == df_row['Date'])]['Split Innoculum'].iloc[0] != None) else df_row['calc_mass_nanno_corrected'], axis=1)
             output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].bfill()
             output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].replace('tmp_for_ffill', None)
@@ -1124,9 +1221,9 @@ class CalcHarvestedSplit(DBColumnsBase):
                     ref_split_innoc_val_next = df_ref_data[(df_ref_data['PondID'] == df_row['PondID']) & (df_ref_data['Date'] == next_row_vals['Date'])]['Split Innoculum'].iloc[0]
                     if ref_split_innoc_val_cur in ('H', 'S', 'HC'):
                         if ref_split_innoc_val_cur in ('H', 'HC'):
-                            update_key = 'est_harvested'
+                            update_key = 'est_harvested_backup'
                         else:
-                            update_key = 'est_split'
+                            update_key = 'est_split_out_backup'
                         
                         if ref_split_innoc_val_cur == 'HC' or ref_split_innoc_val_next == 'I': # if next row is noted "I" for 'inactive', then assume all mass was harvested and return current day mass
                             return_dict[update_key] = df_row['_tmp_mass'] 
@@ -1140,14 +1237,14 @@ class CalcHarvestedSplit(DBColumnsBase):
                                 if next_day_mass_change > 0:
                                     return_dict[update_key] = next_day_mass_change
                 return return_dict
-            output_df.loc[mask, ['H/S', 'est_harvested', 'est_split']] = output_df.loc[mask, :].apply(lambda x: _get_h_s_amount(x), axis=1, result_type='expand')
-            
-        output_df = output_df.drop([col for col in output_df.columns if '_tmp_' in col], axis=1)
+            output_df.loc[mask, ['H/S', 'est_harvested_backup', 'est_split_out_backup']] = output_df.loc[mask, :].apply(lambda x: _get_h_s_amount(x), axis=1, result_type='expand')
+        
+        output_df = output_df[['Date', 'PondID', 'est_harvested_backup', 'est_split_out_backup']]
         return output_df
 
 class CalcDaysSinceHarvestedSplit(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
-    DEPENDENCY_CLASSES = ['GetActiveStatus', 'DailyDataLoad', 'MassVolumeHarvestableCalculations', 'CalcHarvestedSplit'] 
+    DEPENDENCY_CLASSES = ['GetActiveStatus', 'CalcHarvestedSplitMass'] #TODO add class for Split data once its incorporated
    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1165,14 +1262,15 @@ class CalcDaysSinceHarvestedSplit(DBColumnsBase):
                                                      table_name='ponds_data_calculated', 
                                                      query_date_start=start_date-pd.Timedelta(days=45), 
                                                      query_date_end=end_date, 
-                                                     col_names=['active_status', 'H/S'],
+                                                     col_names=['active_status', 'est_harvested', 'est_split_out'],
                                                      check_safe_date=True)
+        
         out_df = ref_df[['Date', 'PondID']]
         # set index to Date so for updating data from a temp df, so that Date-index serves as "key" column to join data on
         out_df = out_df.set_index('Date')
 
-        # get a column of 1's where active_status==True and no ['H', 'S', 'HC'] in the 'H/S' column
-        ref_df['_active_and_not_harvested_split'] = ref_df.apply(lambda row: 1 if row['active_status'] == True and (pd.isna(row['H/S']) or row['H/S'] not in ['H', 'S', 'HC']) else None, axis=1)
+        # get a column of 1's where active_status==True and NOT harvested on day 
+        ref_df['_active_and_not_harvested_split'] = ref_df.apply(lambda row: 1 if row['active_status'] == True and (pd.isna(row['est_harvested']) and pd.isna(row['est_split_out'])) else None, axis=1)
         
         # get cumulative sum for concurrent days of active_status=True and not harvested/split
         # ref for reset df cumsum() with None row vals: https://stackoverflow.com/questions/55147225/pandas-dataframe-cumsum-reset-on-nan
@@ -1184,7 +1282,7 @@ class CalcDaysSinceHarvestedSplit(DBColumnsBase):
 
         # reset index of out_df so that 'Date' is a column again
         out_df = out_df.reset_index()
-        
+
         # filter dates to the param dates (remove the extra 45 days of data added to beginning of query)
         out_df = out_df[out_df['Date'].between(start_date, end_date)]
         
@@ -1341,7 +1439,137 @@ class ProcessingDataLoad(DBColumnsBase):
                        'Gallons dropped', 'HF1 Run Time (hours)', 'HF2 Run Time (hours)', 'SF1 Run Time (hours)', 'SF2 Run Time (hours)', 'SF3 Run Time (hours)', 'Notes', 
                        'Volume Dropped from Ponds (gallons)', 'Lazy River AFDW (g/L)', 'SF Feed AFDW (g/L)', 'Zobi Run TIme (hours)', 'DD Run TIme (hours)', 'SW Dryer Run TIme (hours)']
         return out_df[out_columns]
+
+class HarvestDataLoad(DBColumnsBase):
+    OUT_TABLE_NAME = 'ponds_data'
+    DEPENDENCY_CLASSES = None
     
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+    def run(self):
+        data_months = self._get_months_in_date_range(self.run_date_start, self.run_date_end)
+        self.data_files = {}
+        for month in data_months:
+            self.data_files[month] = self._download_monthly_harvest_data_files(data_year=month[0], data_month=month[1])
+
+        out_df = self._load_harvest_data_from_files(self.run_date_start, self.run_date_end)
+      
+        # update the db (calling a function from .db_utils.py)
+        update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=out_df)
+
+    def _load_harvest_data_from_files(self, start_date, end_date):
+        # init empty df to append rows to for each date
+        combined_df = pd.DataFrame()
+        for d in pd.date_range(start_date, end_date):
+            # get the pd.ExcelFile object for date
+            date_ExcelFile = self.data_files.get((d.year, d.month))
+            for size_tag in ['1.1', '2.2']:
+                try:
+                    # load sheet, skip rows 0-3, and remove rows with 'n/a' vals in the 'Pond ID' field
+                    # convert Pond ID to str (otherwise it strips leading zeroes) 
+                    # and convert Time Open/Time Closed to str (because datetime vals aren't compatible with sqlite and the columns can just be converted whenever needed)
+                    date_df = date_ExcelFile.parse(sheet_name=f'{d.strftime("%y%m%d")} ({size_tag})', header=4, converters={'Pond ID':str, 'Notes': str})
+                    d_success = True
+                except:
+                    print('Could not load harvest data for:', d.strftime('%y/%m/%d'), size_tag)
+                    d_success = False
+
+                if d_success:
+                    # drop columns without a header
+                    date_df = date_df.loc[:, ~date_df.columns.str.contains('^Unnamed')] 
+                    # strip whitespace from column headers
+                    date_df = date_df.rename(columns=lambda x: x.strip())
+                    # rename column headers
+                    date_df = date_df.rename(columns={'Pond ID': 'PondID', 'Initial Depth': 'harvest_initial_depth', 'Final Depth': 'harvest_final_depth', 
+                                                      'Volume Harvested (gallons)': 'harvest_volume', 'Notes': 'harvest_notes'})
+                    # filter/drop unnecessary columns 
+                    date_df = date_df[['PondID', 'harvest_initial_depth', 'harvest_final_depth', 'harvest_volume', 'harvest_notes']]
+                    # drop rows with n/a in PondID (these rows should not contain any valid data)
+                    # also drop rows with n/a in harvest_volume (due to data entry error???)
+                    date_df = date_df.dropna(subset=['PondID', 'harvest_volume'])
+                    # add Date column
+                    date_df['Date'] = d 
+                    # append date df to the combined output df
+                    combined_df = combined_df.append(date_df)
+        
+        # combine duplicate rows (i.e., when a pond is harvested multiple times in one day, then get the total volume, total harvest drop time, 
+        # initial depth (from the first harvest), final depth (from the last last harvest), and concatenate any notes
+        combined_df = combined_df.groupby(['Date', 'PondID']).agg({'harvest_initial_depth': 'max', 
+                                                                   'harvest_final_depth': 'min', 
+                                                                   'harvest_volume': 'sum',
+                                                                   'harvest_notes': list}).reset_index()
+        
+        # re-process the harvest_notes column, since it was only combined into a list with groupby
+        # remove n/a values and join into single string with a '/' separator if there are multiple non-null values
+        combined_df['harvest_notes'] = combined_df['harvest_notes'].apply(lambda x: ' / '.join([i for i in x if not pd.isna(i)]))
+        
+        # sort the combined_df 
+        combined_df = combined_df.sort_values(by=['Date', 'PondID'])
+        return combined_df
+               
+    def _get_months_in_date_range(self, start_date, end_date): 
+        '''
+        Returns a list of months between two dates.
+        Needed to download data files which are separate per month
+        '''
+        month_list = []
+        while start_date <= end_date:
+            if (start_date.year, start_date.month) not in month_list:
+                # append a tuple of (year, month) 
+                month_list.append((start_date.year, start_date.month))
+            start_date += pd.Timedelta(days=1)
+        return month_list
+    
+    def _download_monthly_harvest_data_files(self, data_year: int, data_month: int) -> pd.ExcelFile | None:
+        '''
+        Find and download the "Pond Harvest Log" .xlsx file for the current month (i.e., '12_December Pond Harvest Log.xlsx')
+        This method looks through sharepoint directory organized by: YEAR --> FILE ("mm_Month Pond Harvest Log.xlsx")
+
+        params:
+        --------
+        - data_year: integer representing year
+        - data_month: integer representing month (i.e., 12 for December)
+            
+        RETURNS -> pd.ExcelFile object (if successful download) or None (if failure)
+        '''
+        # get datetime value from data_year and data_month, with date as the 1st (doesn't really matter which date specifically since isn't used)
+        # this is just to easily convert from the integer representation into a search string for the month
+        specify_date = datetime(data_year, data_month, 1)
+        
+        folder_id = load_setting('folder_ids')['harvest_data']
+        for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
+            # first look for the "year" directory
+            if year_dir.name == str(specify_date.year): 
+                # look within the year subdirectory
+                for month_file in year_dir.get_items():
+                    # search for filename with regex: case-insensitive: ["mm_MMMM (ex: 01_January)" (1 or more whitespace chars) "pond harvest log" (zero or more whitespace chars) ".xlsx"]
+                    # use re.search to find 3 groups in filename: date formatted as "mm_MMMM, "pond harvest log" (case insensitive), ".xlsx" (must be at end)
+                    file_search = re.search(r"(?i)({})\s+(Pond Harvest Log).*(\.xlsx$)".format(specify_date.strftime('%m_%B')), month_file.name)
+                    if file_search:
+                        print('FOUND FILE:', month_file.name)
+                        dl_path_dir = Path(f'data_sources/tmp/')
+                        dl_file_path = dl_path_dir / month_file.name
+                        download_attempts = 5
+                        while True:
+                            month_file.download(to_path=dl_path_dir)
+                            if dl_file_path.is_file():
+                                excel_file = pd.ExcelFile(dl_file_path.as_posix()) # load excel file
+                                dl_file_path.unlink() # delete file after loading
+                                return excel_file
+                            else:
+                                download_attempts -= 1
+                                if download_attempts > 0:
+                                    print('Waiting 5 seconds to try download again...')
+                                    time.sleep(5)
+                                    continue
+                                else:
+                                    raise Exception(f'ERROR: located but could not download daily data file for {datetime.strftime(specify_date, "%B %Y")}!')
+                                
+                print(f'COULD NOT FIND HARVEST DATA FILE FOR {datetime.strftime(specify_date, "%B %Y")}!')
+                return None
+
+        
     # def load_sfdata(self, excel_filename):
     #     print('Loading SF Data')
     #     df = pd.read_excel(excel_filename, sheet_name='Customer Log')
