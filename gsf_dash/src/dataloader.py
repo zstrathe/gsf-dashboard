@@ -162,7 +162,7 @@ class DBColumnsBase(ABC):
     @property
     def MIN_LOOKBACK_DAYS(self) -> int:
         if not hasattr(self, "_MIN_LOOKBACK_DAYS"):
-            self._MIN_LOOKBACK_DAYS = 5
+            self._MIN_LOOKBACK_DAYS = 10
         return self._MIN_LOOKBACK_DAYS
 
     @MIN_LOOKBACK_DAYS.setter
@@ -219,12 +219,6 @@ class DailyDataLoad(DBColumnsBase):
 
     def run(self):
         daily_data_dfs = []
-        
-        # # Start with a "base_df" to ensure that a row every Date & PondID combination is included in the db, even if no data is found
-        # date_range = pd.date_range(self.run_date_start, self.run_date_end) # .map(lambda x: x.strftime('%Y-%m-%d')
-        # lp_date, lp_pondid = pd.core.reshape.util.cartesian_product([date_range, self.ponds_list])
-        # base_df = pd.DataFrame(list(zip(lp_date, lp_pondid)), columns=['Date', 'PondID'])
-        # daily_data_dfs.append(base_df)
 
         # Call method to process and load into db the daily data files 
         daily_data_dfs.append(self._load_daily_data_date_range(dt_start=self.run_date_start, dt_end=self.run_date_end))
@@ -237,9 +231,13 @@ class DailyDataLoad(DBColumnsBase):
 
     def _load_daily_data_date_range(self, dt_start: datetime, dt_end: datetime):
         day_dfs = []
+        removed_cols_full = []
         for idx, d in enumerate(rrule(DAILY, dtstart=dt_start, until=dt_end)):
-            day_dfs.append(self._load_daily_data_file(specify_date=d))
-        out_df = pd.concat(day_dfs, axis=0, join='outer') 
+            d_df, removed_cols_list = self._load_daily_data_file(specify_date=d)
+            day_dfs.append(d_df)
+            [removed_cols_full.append(col_name) for col_name in removed_cols_list if col_name not in removed_cols_full]
+        out_df = pd.concat(day_dfs, axis=0, join='outer')
+        print(f'\nAll columns ignored from Daily Data files for date range {dt_start.strftime("%-m/%-d/%Y")} to {dt_end.strftime("%-m/%-d/%Y")}:\n{removed_cols_full}\n')
         return out_df
 
     def _load_daily_data_file(self, specify_date: datetime, return_removed_cols=False):  # daily_data_excel_file_path: Path
@@ -259,12 +257,19 @@ class DailyDataLoad(DBColumnsBase):
         # extracted allowed columns from the DB table
         # Use these columns in the database of daily data for each pond
         # will need to rebuild the database if altering columns
+        
+        # daily_data_cols = ['Date', 'Time Sampled', 'Depth', 'Temp', 'Handheld pH', 'PLC pH', 'Afternoon PLC', 'Calibration Needed', 'CO2 psi', 'Pond Color', 'ppm UAN-32 Added', 'Volume UAN-32 Added', 
+        #                    'ppm 10-34 Added', 'Volume 10-34 Added', 'Volume Trace Added', 'Volume Iron Added', 'ppm Bleach Added', 'Volume Bleach Added', 'ppm Cal Hypo Added', 'kg Cal Hypo Added', 
+        #                    'Media Only', 'Column', 'Fo', 'Fm', 'Yield', 'Salinity', 'TOC-AFDW', 'TOC', 'IC', 'TC', 'Filter DW', 'Filter AFDW', '% Ash', 'Alkalinity', 'TN', 'PO4', 'Notes-QAQC', 
+        #                    'Rotifers', '% Nanno', 'Morphology', 'Dead Cells', 'Flocculation', 'Detritus', 'Attached FD111', 'Free Floating FD111', 'Golden Flagellates', 'Diatoms', 'Tetra', 'Green Algae', 
+        #                    'Chlamy', 'Ciliates', 'Flagellates', 'Segmented Bacteria', 'Rod Shaped Bacteria', 'Spirochetes', 'Amoeba', '% Ash Relative to DW', 'Notes-Crop Protection', 'ppm Benzalkonium Added', 
+        #                    'Volume Benzalkonium Added', 'Sodium Chloride', 'Sodium Bicarb', 'Magnesium Sulfate', 'Potassium Chloride', 'Calcium Chloride']
+        
         allowed_cols = get_db_table_columns(self.db_engine, self.OUT_TABLE_NAME)
         used_cols = {} # keep track of used columns and the sheet that they appear on (for checking whether there is duplicate data or inaccurate data (such as same column name between sheets with different values...shouldn't happen and might indicate bad data)
         sheets_data = {}
         all_removed_cols = []
         # extract data from each sheet create a composite dataframe for each pond
-        #for sheet_name in excel_sheets.sheet_names:
         for idx, (sheet_name, df) in enumerate(excel_dataframes.items()):
             print('Processing', sheet_name, '...')
             ''' Column name cleaning '''
@@ -300,7 +305,7 @@ class DailyDataLoad(DBColumnsBase):
                 df['Time Sampled'] = df['Time Sampled'].apply(lambda x: str(x) if not pd.isna(x) else None)
             if 'Filter AFDW' in df:
                 df['Filter AFDW'] = df['Filter AFDW'].replace(0, None) # replace zero values in AFDW column with None, as zero values may cause issues with other calculated fields 
-            
+
             ''' Set "PondID" as index column of each sheet (required for properly merging sheets) and sort the df by PondID '''
             df = df.set_index('PondID').sort_values(by='PondID')
             
@@ -310,6 +315,9 @@ class DailyDataLoad(DBColumnsBase):
             else:
                 ''' Drop columns not in allowed_cols list '''
                 removed_cols = df.columns.difference(allowed_cols)
+                check_cols = ['Sodium Chloride', 'Sodium Bicarb', 'Magnesium Sulfate', 'Potassium Chloride', 'Calcium Chloride']
+                if any([check_name in removed_cols for check_name in check_cols]):
+                    print("\n\n*************************************************************************************** FOUND ONE OF  'Sodium Chloride', 'Sodium Bicarb', 'Magnesium Sulfate', 'Potassium Chloride', 'Calcium Chloride' *******************************************\n\n")
                 [all_removed_cols.append(col) for col in removed_cols if col not in all_removed_cols]
                 df = df[df.columns.intersection(allowed_cols)]
              
@@ -352,10 +360,10 @@ class DailyDataLoad(DBColumnsBase):
                             else: # else drop the "other" column
                                 sheets_data[used_cols[col]] = sheets_data[used_cols[col]].drop([col], axis=1)
                                 used_cols[col] = sheet_name  # set the current sheet name for the "used_cols" dict which tracks which sheet a column of data is being sourced from
-                            #raise Exception(f'ERROR: mismatching column data between sheets: {used_cols[col]} & {sheet_name}, column: {col}')
+                    
             sheets_data[sheet_name] = df
 
-        print('All cols removed from file:', all_removed_cols)
+        print('Columns ignored from file:', all_removed_cols)
         
         # compute a column length check value in case of bugs from handling and dropping duplicate columns 
         # raise an exception in case of an error
@@ -372,7 +380,7 @@ class DailyDataLoad(DBColumnsBase):
             raise Exception('ERROR WITH MERGING DAILY DATA SHEETS!')
         
         joined_df = joined_df.reset_index() #.set_index(['Date', 'PondID']) # reset index and create a multi-index (a compound primary key or whatever it's called for the SQL db)
-        return joined_df
+        return joined_df, all_removed_cols
         
     def _download_daily_data_file(self, specify_date: str = '') -> pd.ExcelFile | None:
         '''
@@ -771,7 +779,11 @@ class GetActiveStatus(DBColumnsBase):
             return False
         
         query_begin_date = begin_date - pd.Timedelta(days=max_check_days)
-        ref_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=begin_date-pd.Timedelta(days=max_check_days), query_date_end=end_date, col_names=['Time Sampled', 'Fo', 'Split Innoculum', 'Filter AFDW'])
+        ref_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                table_name='ponds_data', 
+                                                query_date_start=begin_date-pd.Timedelta(days=max_check_days), 
+                                                query_date_end=end_date, 
+                                                col_names=['Time Sampled', 'Fo', 'Split Innoculum', 'Filter AFDW'])
         out_df = ref_df.loc[ref_df['Date'] >= begin_date, :].copy()
        
         for pond_id in out_df['PondID'].unique():
@@ -1066,15 +1078,21 @@ class CalcMassGrowthAggregate(DBColumnsBase):
         
     def _calc_growth_agg(self, start_date, end_date):
         '''
-        minimum date range span to calculate aggregate growth is 7 days
+        minimum date range span to calculate aggregate growth is 19 days:
+        - 5 days for rolling sums
+        - 14 days of comparison (each a calc from a rolling sum)
         '''
         # check if date range provided is at least 14, else override start_date param
         _param_start_date = start_date
-        if (end_date - start_date).days < 7:
-            start_date = end_date - pd.Timedelta(days=7)
+        if (end_date - start_date).days < 19:
+            start_date = end_date - pd.Timedelta(days=19)
 
         # query growth data (by pond) and subtotal by date
-        agg_growth_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d'])
+        agg_growth_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                       table_name='ponds_data_calculated', 
+                                                       query_date_start=start_date, 
+                                                       query_date_end=end_date, 
+                                                       col_names=['growth_ref_mass_change_grams_7d', 'growth_ref_prev_liters_7d', 'growth_ref_prev_norm_liters_7d'])
         agg_growth_df = agg_growth_df.groupby(by='Date').sum()
         
         # calculate running average growth
@@ -1091,7 +1109,6 @@ class CalcMassGrowthAggregate(DBColumnsBase):
         # filter output to include rows only greater than the parameter start_date (since it is overridden to a min of 7 days for calculations to work)
         agg_growth_df = agg_growth_df[agg_growth_df['Date'] >= _param_start_date]
 
-        print(agg_growth_df)
         return agg_growth_df
 
 class CalcHarvestedSplitMass(DBColumnsBase):
@@ -1190,8 +1207,16 @@ class CalcHarvestedSplitMass(DBColumnsBase):
         Method to get an estimate of harvested/split mass using the delta of calculated mass between two days
         USING AS A BACKUP METHOD, FOR WHEN HARVESTED VOLUME DATA WAS ERRONEOUSLY NOT RECORDED
         '''
-        df_ref_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=['Split Innoculum'])
-        df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=start_date, query_date_end=end_date, col_names=['calc_mass_nanno_corrected'])
+        df_ref_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                     table_name='ponds_data', 
+                                                     query_date_start=start_date, 
+                                                     query_date_end=end_date, 
+                                                     col_names=['Split Innoculum'])
+        df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                       table_name='ponds_data_calculated', 
+                                                       query_date_start=start_date, 
+                                                       query_date_end=end_date, 
+                                                       col_names=['calc_mass_nanno_corrected'])
            
         output_df = df_data_calcs.copy()
         for pond_id in output_df['PondID'].unique():
@@ -1318,12 +1343,40 @@ class GetPondHealthStatusCode(DBColumnsBase):
             - 6: dark green: afdw >= 0.80; epa_val > 3%
             - ERROR: should not happen, possible bug in code / missing conditions / etc
         '''
+        # override begin_date param, need 3 days of data minimum 
+        orig_begin_date = begin_date
+        if (end_date - begin_date).days < 3:
+            begin_date = end_date - pd.Timedelta(days=2)
         
-        afdw_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=begin_date, query_date_end=end_date, col_names=['Filter AFDW'])
-        active_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data_calculated', query_date_start=begin_date, query_date_end=end_date, col_names=['active_status'])
-        epa_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='epa_data', query_date_start=begin_date, query_date_end=end_date, col_names=['epa_val'], raise_exception_on_error=False)
+        afdw_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                 table_name='ponds_data', 
+                                                 query_date_start=begin_date, 
+                                                 query_date_end=end_date, 
+                                                 col_names=['Filter AFDW'], 
+                                                 check_safe_date=True)
+        active_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                   table_name='ponds_data_calculated', 
+                                                   query_date_start=begin_date, 
+                                                   query_date_end=end_date, 
+                                                   col_names=['active_status'],
+                                                   check_safe_date=True)
+        epa_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                table_name='epa_data', 
+                                                query_date_start=begin_date, 
+                                                query_date_end=end_date, 
+                                                col_names=['epa_val'],
+                                                check_safe_date=True,
+                                                raise_exception_on_error=False)
         df = functools.reduce(lambda df1, df2: pd.merge(df1, df2, on=['Date','PondID'], how='outer'), [df for df in [afdw_df, active_df, epa_df]])
-       
+
+        # forward fill AFDW a max of 2 days to account for weekends when measurements aren't taken
+        # add a placeholder on inactive days to prevent forward filling (i.e., if a pond was drained and re-started, don't carry forward data)
+        df['Filter AFDW'] = df.apply(lambda row: '_tmp_placeholder_for_ffill' if row['active_status'] == False else row['Filter AFDW'], axis=1)
+        for pond_id in self.ponds_list:
+            mask = df['PondID'] == pond_id
+            df.loc[mask, 'Filter AFDW'] = df.loc[mask, 'Filter AFDW'].ffill(limit=2) # forward fill AFDW a maximum 2 days, to account for weekends when measurements aren't taken
+        df['Filter AFDW'] = df['Filter AFDW'].replace('_tmp_placeholder_for_ffill', None)
+        
         # conditions
         conditions = [
             df['active_status'] == False,
@@ -1336,6 +1389,10 @@ class GetPondHealthStatusCode(DBColumnsBase):
         choices = [0, 1, 2, 3, 4, 5, 6]
         
         df['status_code'] = np.select(conditions, choices, default='ERROR')
+
+        # set filter to orig date range
+        df = df[df['Date'].between(orig_begin_date, end_date)]
+        
         return df[['Date', 'PondID', 'status_code']]
         
 class ChemicalUsageLoad(DBColumnsBase):
@@ -1368,7 +1425,11 @@ class ChemicalUsageLoad(DBColumnsBase):
         '''
         # query the chemical usage amounts from db
         data_col_names = [v['data_column'] for v in self.chem_costs.values()]
-        calc_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, table_name='ponds_data', query_date_start=start_date, query_date_end=end_date, col_names=data_col_names)
+        calc_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                 table_name='ponds_data', 
+                                                 query_date_start=start_date, 
+                                                 query_date_end=end_date, 
+                                                 col_names=data_col_names)
         calc_df = calc_df.fillna(0) # fill in zeroes for NaN chemical usage values
 
         # loop through chemicals in cost dict and add to "out_dict" according to the "out_column" value in cost dict
@@ -1574,7 +1635,6 @@ class HarvestDataLoad(DBColumnsBase):
                 print(f'COULD NOT FIND HARVEST DATA FILE FOR {datetime.strftime(specify_date, "%B %Y")}!')
                 return None
 
-        
     # def load_sfdata(self, excel_filename):
     #     print('Loading SF Data')
     #     df = pd.read_excel(excel_filename, sheet_name='Customer Log')

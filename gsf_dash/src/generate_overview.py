@@ -570,7 +570,20 @@ class PondsOverviewPlots:
                     num_active_1_acre = measurements_df[(measurements_df["Column"].isin(['1', '2', '3', '4'])) & (measurements_df["active_status"] == True)].shape[0]
                     num_active_2_acre = measurements_df[(measurements_df["Column"].isin(['6', '8'])) & (measurements_df["active_status"] == True)].shape[0]
                     total_active_acres = (num_active_1_acre * 1.1) + (num_active_2_acre * 2.2)
-                    total_calc_mass = measurements_df.loc[measurements_df["active_status"] == True, "calc_mass_nanno_corrected"].sum()
+
+                    # forward fill mass for missing days on active ponds
+                    # first, add a string placeholder to stop filling on inactive days (to prevent carrying value over if a pond was re-started)
+                    total_calc_mass = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
+                                                                  table_name='ponds_data_calculated', 
+                                                                  query_date_start=self.select_date-pd.Timedelta(days=3), 
+                                                                  query_date_end=self.select_date, 
+                                                                  col_names=['active_status', 'calc_mass_nanno_corrected'])
+                    total_calc_mass['calc_mass_nanno_corrected'] = total_calc_mass.apply(lambda row: '_tmp_placeholder_for_ffill' if row['active_status'] == False else row['calc_mass_nanno_corrected'], axis=1)
+                    for pond_id in total_calc_mass['PondID'].unique():
+                        mask = total_calc_mass['PondID'] == pond_id
+                        total_calc_mass.loc[mask, 'calc_mass_nanno_corrected'] = total_calc_mass.loc[mask, 'calc_mass_nanno_corrected'].ffill(limit=2)
+                    total_calc_mass['calc_mass_nanno_corrected'] = total_calc_mass['calc_mass_nanno_corrected'].replace('_tmp_placeholder_for_ffill', None)
+                    total_calc_mass = total_calc_mass.loc[(total_calc_mass["active_status"] == True) & (total_calc_mass['Date'] == self.select_date), "calc_mass_nanno_corrected"].sum()
                     
                     print_string = (r'$\bf{Total\/\/Active\/\/ponds: }$' + f'{total_active_ponds}\n' 
                                     + r'$\bf{Active\/\/1.1\/\/acre\/\/ponds: }$' + f'{num_active_1_acre}\n'

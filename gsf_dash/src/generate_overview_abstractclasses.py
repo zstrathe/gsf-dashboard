@@ -307,7 +307,7 @@ class ExpenseGridReport(BasePondsGridReport):
         
         # Query ytd expense & estimated harvested data from DB, returns a pandas dataframe of data for each day and each pond
         self.ytd_expense_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_expenses', query_date_start=self.ytd_start, query_date_end=self.report_date)
-        self.ytd_harvest_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_calculated', query_date_start=self.ytd_start, query_date_end=self.report_date, col_names=['est_harvested', 'est_split'])
+        self.ytd_harvest_data = query_data_table_by_date_range(db_name_or_engine= 'gsf_data', table_name='ponds_data_calculated', query_date_start=self.ytd_start, query_date_end=self.report_date, col_names=['est_harvested']) # removed: 'est_split_out' - add back in once 'est_split_in' available  
         
         # get mtd expense & harvested data by filtering ytd_expense data
         self.mtd_expense_data = self.ytd_expense_data[self.ytd_expense_data['Date'] >= self.mtd_start.strftime('%Y-%m-%d')]
