@@ -86,9 +86,6 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
     # convert Date column in update dataframe to string
     update_data_df = convert_df_date_cols(update_data_df, option='TO_STR')
     
-    # create temp table in database to update the target table from
-    update_data_df.to_sql(name='__temp_table', con=db_engine, if_exists='replace', index=False)
-    
     # construct a statement to first insert primary key pairs into the table if they don't already exist (ignore if they do exist using INSERT OR IGNORE for sqlite)
     pk_vals = ', '.join(['(' + ', '.join([f'"{i}"' for i in sublist]) + ')' for sublist in update_data_df[pk_cols].values.tolist()])
     '''
@@ -114,9 +111,15 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
     # execute sql statement
     # if resulting number of modified rows does not equal the length of the update_df, then rollback transaction 
     with db_engine.begin() as conn:
+        # create temp table in database to update the target table from
+        update_data_df.to_sql(name='__temp_table', con=conn, if_exists='replace', index=False)
+
+        # insert table rows
         insert_rows_result = conn.execute(sql_insert_keys_stmt)
         print('New rows inserted:', insert_rows_result.rowcount)
-        
+
+        # insert data and verify update by checking rowcount between update_data_df and the SQL result
+        # Rollback transaction if rowcounts are not equal (Error condition, possibly because of duplicate rows in the update_data_df)
         update_result = conn.execute(sql_update_stmt)
         if update_result.rowcount == len(update_data_df):
             print('Rows successfully updated:', update_result.rowcount)
@@ -179,7 +182,7 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
     col_names: list of column names (strings) to return or None
         - if None -> returns all columns
     raise_exception_on_error: bool :  if query fails, default (True) is to raise Exception; however if set to False this parameter will allow None to be returned instead
-    check_safe_date: bool: if True, check for the first available date in the db table and override the query_date_start param; otherwise if False (default) do not override 
+    check_safe_date: bool: if True, check for the first available date in the db table and override the query_date_start param if necessary; otherwise if False (default) do not override (and will fail if date param falls outside of available range in db)
     
     Returns
     --------
