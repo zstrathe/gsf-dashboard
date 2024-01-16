@@ -1,15 +1,14 @@
 from datetime import datetime
 import functools
-import pandas as pd
 import warnings
-import math
-warnings.simplefilter(action='ignore', category=FutureWarning)
-warnings.simplefilter(action='ignore', category=UserWarning)
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse, Rectangle
 from .utils import generate_multipage_pdf
 from .db_utils import query_data_table_by_date_range
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=UserWarning)
 
 class PondsOverviewPlots:
     def __init__(self, select_date, source_db='gsf_data', run=True, save_output=True): 
@@ -26,7 +25,6 @@ class PondsOverviewPlots:
         max_coords = [1,1,0,0] #  initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
         data_rows_x_bound = [1,0]
         data_rows_y_bounds = [] 
-        indicator_plots = []
         for row in legend_data:
             row_y_bound = [1,0]
             row_fill_color = 'white'
@@ -139,16 +137,13 @@ class PondsOverviewPlots:
        
             # Get the last harvest date for each pond, done separately from other data queries due to needing full range of dates, and regardless of whether it's active
             # the date found is relative to the select_date parameter (so reports can always be generated relative to a specific date even for past dates)
-            last_harvest_idx = harvest_idx_df.loc[harvest_idx_df['PondID'] == pond_name, 'Split Innoculum'].last_valid_index()
-            if last_harvest_idx:
-                pond_last_harvest_date = harvest_idx_df.iloc[last_harvest_idx]['Date']
-                pond_last_harvest_str = pond_last_harvest_date.strftime('%-m-%-d-%y')
-                pond_days_since_harvest = (select_date - pond_last_harvest_date).days
-            else:
-                pond_last_harvest_str = 'n/a'
-            
+            try:
+                pond_last_harvest_str = last_harvest_dates_df.loc[last_harvest_dates_df['PondID'] == pond_name, 'last_harvest_date'].iloc[0]
+            except KeyError:
+                pond_last_harvest_str = 'n/a exception'
+           
             # Gather current data for pond if it's active
-            if pond_active == True:
+            if pond_active:
                 # get most recent EPA value and measurement date
                 epa_val, epa_date = epa_df[(epa_df['PondID'] == pond_name) & (epa_df['Date'] == self.select_date)].iloc[0].loc[['epa_val', 'measurement_date_actual']]
                 if pd.isna(epa_val):
@@ -192,22 +187,22 @@ class PondsOverviewPlots:
             # title subplot
             title_ax = plt.Subplot(fig, inner_plot[:2,:])
 
-            # plot pond EPA data
-            try:
-                if epa_val == None:
+            # plot pond ID (bolded)
+            title_ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
+            
+            if pond_active:
+                # plot pond EPA data
+                if epa_val is None:
                     epa_val_str = 'No EPA data'
                 else:
                     epa_val_str = f'{epa_val:.2f}% EPA'
                     title_ax.text(0.95, 0.8, epa_date.strftime('as of\n%-m/%-d'), ha='center', va='center', fontsize='x-small')
                 title_ax.text(0.78, 0.8, epa_val_str, ha='center', va='center')
-            except:
-                pass
+            
+                # plot last harvest date for pond
+                title_ax.text(0.5, 0.5, f'last harvest/split: {pond_last_harvest_str}', ha='center', va='center')
 
-            title_ax.text(0.5, 0.8, r'$\bf{' + pond_name + '}$', ha = 'center', va='center', fontsize='large')
-            title_ax.text(0.5, 0.5, f'last harvest/split: {pond_last_harvest_str}', ha='center', va='center')
-
-            # Display pond pest/indicator info under subplot title for active ponds
-            if pond_active == True:
+                # Display pond pest/indicator info under subplot title for active ponds
                 try:
                     # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
                     # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
@@ -229,24 +224,25 @@ class PondsOverviewPlots:
                         title_ax.add_patch(Ellipse((calc_start_x, indicator_plot_y + 0.02), circle_width, circle_height, color=color, fill=color))
                         title_ax.text(calc_start_x, indicator_plot_y, indicator_string, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
                         calc_start_x += x_space
-                except: 
+                except Exception as e:
+                    print(f'ERROR: {e}: with plotting indicators for pond {pond_name}') 
                     title_ax.text(0.5, 0.15, 'ERROR PLOTTING INDICATORS', ha='center')                   
             subplot_ax_format(title_ax)
             
-            if pond_active == True: 
+            if pond_active: 
                                
                 # format data for plotting
                 pond_data_depth = pond_data['Depth']
                 if pd.isna(pond_data_depth) or pond_data_depth == 0:
                     pond_data_depth = 'No data'
                 else:    
-                    pond_data_depth = f'{"**" if pond_data["non_current_data_flag_depth"] == True else ""}{pond_data_depth}"' # print two asterisks before if data was flagged as 'non-current'
+                    pond_data_depth = f'{"**" if pond_data["non_current_data_flag_depth"] is True else ""}{pond_data_depth}"' # print two asterisks before if data was flagged as 'non-current'
 
                 pond_data_afdw = pond_data['Filter AFDW']
                 if pd.isna(pond_data_afdw) or pond_data_afdw == 0:
                     pond_data_afdw = 'No data'
                 else:
-                    pond_data_afdw = f'{"**" if pond_data["non_current_data_flag_afdw"] == True else ""}{round(pond_data_afdw,3)}' # print two asterisks before if data was flagged as 'non-current'
+                    pond_data_afdw = f'{"**" if pond_data["non_current_data_flag_afdw"] is True else ""}{round(pond_data_afdw,3)}' # print two asterisks before if data was flagged as 'non-current'
 
                 pond_data_harvestable_mass = pond_data['harvestable_mass_nanno_corrected']
                 if pd.isna(pond_data_harvestable_mass) or pond_data_harvestable_mass == 0:
@@ -283,7 +279,7 @@ class PondsOverviewPlots:
             # however, this dict doesn't exist for ponds that aren't active, so just iterating through a range instead
                 ax = plt.Subplot(fig, inner_plot[2:,idx])
                 
-                if pond_active == True: 
+                if pond_active: 
                     subplot_dict_key = list(data_plot_dict.keys())[idx] 
                     text_y = 0.83 # starting y-coordinate for text on subplot, updated after each text plot to decrease y-coord
                     sub_heading = ax.text(0.5, text_y, subplot_dict_key, ha='center', va='center') # subplot heading text
@@ -303,7 +299,7 @@ class PondsOverviewPlots:
                         # if pond_data_error == True:
                         #     t = ax.text(0.5, 0.9, 'Data Error', ha='center', va='top')
                         # else:
-                        t = ax.text(0.5, 0.9, 'Inactive', ha='center', va='top')
+                        ax.text(0.5, 0.9, 'Inactive', ha='center', va='top')
                     ax.set_facecolor('snow')
                 subplot_ax_format(ax)
             
@@ -337,6 +333,15 @@ class PondsOverviewPlots:
                                                                   query_date_end=self.select_date, 
                                                                   col_names=['active_status', 'status_code', 'calc_mass_nanno_corrected', 'harvestable_depth_inches', 'harvestable_mass_nanno_corrected', 'running_avg_norm_growth_5d', 'running_avg_norm_growth_14d'])
         measurements_df = pd.merge(measurements_df, _tmp_calculated_query_df, how='outer', on=['Date', 'PondID'])
+
+        # query df just for using to determine on what date a pond was last harvested, if ever
+        # look back 90 days for data
+        last_harvest_dates_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
+                                                        table_name='ponds_data_calculated', 
+                                                        query_date_start=self.select_date, 
+                                                        query_date_end=self.select_date, 
+                                                        col_names=['days_since_harvested_split'])
+        last_harvest_dates_df['last_harvest_date'] = last_harvest_dates_df['days_since_harvested_split'].apply(lambda x: (self.select_date - pd.Timedelta(days=x)).strftime("%-m-%-d-%y") if not pd.isna(x) else "n/a")
         
         # if either Depth or AFDW values are missing for current day, check prev day
         # and if prev_day data is used instead, set non_current_data_flag to True for adding "**" to the value, and an explanation footnote to report
@@ -344,7 +349,7 @@ class PondsOverviewPlots:
             curr_date_mask = (measurements_df['PondID'] == pond_id) & (measurements_df['Date'] == self.select_date)
             prev_date_mask = (measurements_df['PondID'] == pond_id) & (measurements_df['Date'] == self.select_date-pd.Timedelta(days=1))
             active_status = measurements_df.loc[curr_date_mask]['active_status'].iloc[0]
-            if active_status == True:
+            if active_status:
                 curr_depth, curr_afdw = measurements_df.loc[curr_date_mask][['Depth', 'Filter AFDW']].iloc[0].values
                 
                 # if current date "Depth" value is missing or zero, then look at previous day value, and use it if available
@@ -385,14 +390,6 @@ class PondsOverviewPlots:
             any_noncurrent_flag = True
         else:
             any_noncurrent_flag = False
-                    
-        # query df just for using to determine on what date a pond was last harvested, if ever
-        # look back 90 days for data
-        harvest_idx_df = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
-                                                        table_name='ponds_data', 
-                                                        query_date_start=self.select_date-pd.Timedelta(days=90), 
-                                                        query_date_end=self.select_date, 
-                                                        col_names=['Split Innoculum']) 
         
         n_rows_small = 12
         n_rows_large = 10
@@ -460,21 +457,20 @@ class PondsOverviewPlots:
                     
                     for code, vals_dict in total_mass_by_code.copy().items():
                         pond_count, calc_mass = vals_dict.values()
-                        total_mass_by_code[code]['pond_count'] = pond_count if pond_count != None and pond_count > 0 else "-"
-                        total_mass_by_code[code]['calc_mass_nanno_corrected'] = f'{calc_mass:,.0f} kg' if calc_mass != None and calc_mass > 0 else "-"
+                        total_mass_by_code[code]['pond_count'] = pond_count if pond_count is not None and pond_count > 0 else "-"
+                        total_mass_by_code[code]['calc_mass_nanno_corrected'] = f'{calc_mass:,.0f} kg' if calc_mass is not None and calc_mass > 0 else "-"
                     
-                    '''
-                    status codes: from DB
-                        - 0: inactive pond 
-                        - 1: grey: incomplete data (either 'afdw' or 'epa_val' are missing)
-                        - 2: red: afdw less than 0.25
-                        - 3: brown: afdw >= 0.25; epa_val < 2.5%
-                        - 4: yellow: (afdw >= 0.25 and afdw < 0.50) OR (epa_val >=2.5% and epa_val < 3%)
-                        - 5: light green: afdw >= 0.50 and < 0.80; epa_val > 3%
-                        - 6: dark green: afdw >= 0.80; epa_val > 3%
-                        - ERROR: should not happen, possible bug in code / missing conditions / etc
-
-                    '''
+                    #######################################################################################
+                    # status codes: from DB  
+                    #     - 0: inactive pond 
+                    #     - 1: grey: incomplete data (either 'afdw' or 'epa_val' are missing)     
+                    #     - 2: red: afdw less than 0.25                     
+                    #     - 3: brown: afdw >= 0.25; epa_val < 2.5%                                              
+                    #     - 4: yellow: (afdw >= 0.25 and afdw < 0.50) OR (epa_val >=2.5% and epa_val < 3%)
+                    #     - 5: light green: afdw >= 0.50 and < 0.80; epa_val > 3%
+                    #     - 6: dark green: afdw >= 0.80; epa_val > 3%
+                    #     - ERROR: should not happen, possible bug in code / missing conditions / etc
+                    #######################################################################################
                     
                     legend_data = [{'labels':
                                         {'Color key': {'align': '1-l', 'weight': 'bold'}}},
@@ -559,9 +555,9 @@ class PondsOverviewPlots:
                     
                     
                 elif 'BLANK 13-1' in pond_name:
-                    ''' 
-                    Plot information of various daily aggregates in this cell (13th row, column 1)
-                    '''
+                    ###
+                    # Plot information of various daily aggregates in this cell (13th row, column 1)
+                    ###
                     # add note for noncurrent AFDW or Depth data when they are being used
                     if any_noncurrent_flag: 
                         ax.text(0,0.95, "** indicates AFDW or Depth data that is not available for the current day, so using data from previous day", ha='left', va='center', fontsize='small')
@@ -590,12 +586,11 @@ class PondsOverviewPlots:
                                     + r'$\bf{Active\/\/2.2\/\/acre\/\/ponds: }$' + f'{num_active_2_acre}\n'
                                     + r'$\bf{Total\/\/Active\/\/Acres: }$' + f'{total_active_acres:,.0f}\n'
                                    + r'$\bf{Calculated\/\/total\/\/mass:}$' + f'{total_calc_mass:,.0f} kg')
-                    t = ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
+                    ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
 
                 elif 'BLANK 13-3' in pond_name:
-                    ''' 
-                    Plot growth rate info
-                    '''
+                    ###
+                    #Plot growth rate info
                     growth_data = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='ponds_data_aggregate', 
                                                          query_date_start=self.select_date, 
@@ -613,13 +608,12 @@ class PondsOverviewPlots:
                                     + r'$\bf{Total\/\/5\/\/Day\/\/Running\/\/Avg\/\/Growth: }$' + run_avg_growth_5d + '\n' 
                                     + r'$\bf{Total\/\/14\/\/Day\/\/Running\/\/Avg\/\/Growth: }$' + run_avg_growth_14d + '\n')
             
-                    t = ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
+                    ax.text(0,0.75, print_string, ha='left', va='top', fontsize=16, multialignment='left')        
 
                 elif 'BLANK 14-1' in pond_name:
-                    '''
-                    Plot information of prior day processing totals from self.processing_dataframe
-                    on row 13, column 3
-                    '''
+                    ###
+                    # Plot information of prior day processing totals from self.processing_dataframe
+                    # on row 13, column 3
                     processing_columns = {'Zobi Volume:': 
                                               {'column_name': 'Zobi Permeate Volume (gal)',
                                                 'data_format': int,
@@ -651,7 +645,6 @@ class PondsOverviewPlots:
                                                'str_label': ''
                                               }
                                          }
-                    prev_date = select_date - pd.Timedelta(days=1)
                     
                     processing_data_str = f'Previous Day ({(select_date-pd.Timedelta(days=1)).strftime("%-m/%-d")}) Processing Totals'
                     proc_t = ax.text(0,1, processing_data_str, ha='left', va='top', fontsize='large', multialignment='left')
@@ -665,7 +658,7 @@ class PondsOverviewPlots:
                                                          query_date_end=self.select_date-pd.Timedelta(days=1)).iloc[0] 
 
                     for label, subdict in processing_columns.items():
-                        if type(subdict['column_name']) == list: # when 'column_name' is a list, get the first item with data (so first item in list is primary source)
+                        if isinstance(subdict['column_name'], list): # when 'column_name' is a list, get the first item with data (so first item in list is primary source)
                             for data_col_name in subdict['column_name']:
                                 try: # force the data item to the 'data_format' type, with try/except to catch errors
                                     data_i = prev_date_processing_data[data_col_name]
@@ -679,7 +672,7 @@ class PondsOverviewPlots:
                         else: 
                             try:
                                 prev_day_val = prev_date_processing_data[subdict["column_name"]]
-                                if (subdict['data_format'] == str and (prev_day_val == '' or prev_day_val == 'nan')) or (subdict['data_format'] != str and prev_day_value == 0):
+                                if (subdict['data_format'] == str and (prev_day_val == '' or prev_day_val == 'nan')) or (subdict['data_format'] != str and prev_day_val == 0):
                                     prev_day_val = None
                             except:
                                 prev_day_val = None

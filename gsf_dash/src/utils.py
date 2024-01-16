@@ -1,11 +1,7 @@
 from configparser import ConfigParser
-from O365 import Account, FileSystemTokenBackend
+from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
-import email
-from datetime import datetime
-from pathlib import Path
-import sys
 
 # load auth credentials & settings from settings.cfg file
 def load_setting(specified_setting):
@@ -43,8 +39,8 @@ def generate_multipage_pdf(fig_list, pdf_filename, add_pagenum=True, bbox_inches
             plt.close()
     return pdf_filename
     
-''' Decorator to temporarily redirect stdout to a file '''
 def redirect_logging_to_file(log_file_directory: Path, log_file_name: str):
+    ''' Decorator to temporarily redirect stdout to a file '''
     def decorator(function):
         def func_wrapper(*args, **kwargs):
             log_file = log_file_directory / log_file_name
@@ -54,7 +50,7 @@ def redirect_logging_to_file(log_file_directory: Path, log_file_name: str):
             with open(log_file_path, "w") as f:
                 with redirect_stdout(f):
                     output = function(*args, **kwargs)
-            print(f'Stdout log saved...')
+            print('Stdout log saved...')
             return output
         return func_wrapper
     return decorator

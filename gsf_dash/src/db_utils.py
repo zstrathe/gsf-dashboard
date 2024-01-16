@@ -1,12 +1,10 @@
 import os
+from datetime import datetime, timedelta
+from pathlib import Path
 import sqlalchemy
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
-from dateutil.rrule import rrule, DAILY 
-from datetime import datetime, date, timedelta
-from pathlib import Path
-from .utils import load_setting
-from .ms_account_connect import MSAccount, M365ExcelFileHandler, EmailHandler
+from dateutil.rrule import rrule, DAILY
 
 def get_db_table_columns(db_engine: sqlalchemy.Engine, table_name) -> list:
     table = load_table(db_engine, table_name)
@@ -24,14 +22,14 @@ def init_db_table(db_engine: sqlalchemy.Engine, table_name: str) -> None:
         return
 
     # load the CREATE TABLE statement from file
-    with open(table_schemas_path / f'{table_name}.create_table', 'r') as file:
+    with open(table_schemas_path / f'{table_name}.create_table', 'r', encoding="utf-8") as file:
         table_schema = file.read()
 
     table_already_exists = check_if_table_exists(db_engine, table_name)
     
     with db_engine.begin() as conn:
         if table_already_exists:
-            if confirm_drop_table := input(f'{table_name} table already exists! Type "Yes" to confirm dropping table, otherwise press any other key') == 'Yes':
+            if input(f'{table_name} table already exists! Type "Yes" to confirm dropping table, otherwise press any other key') == 'Yes':
                 tmp_table = sqlalchemy.Table(table_name, sqlalchemy.MetaData(), autoload_with=db_engine)
                 tmp_table.drop(db_engine)
             else:
@@ -47,7 +45,7 @@ def get_primary_keys(db_table: sqlalchemy.Table) -> list:
     # Inspector.primary_key -> Column objects that are primary keys for table -> column.name
     return [k.name for k in inspector.primary_key]
 
-def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, update_data_df: pd.DataFrame, pk_cols: list = ['Date', 'PondID']) -> bool:
+def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, update_data_df: pd.DataFrame, pk_cols: list|tuple|str = ('Date', 'PondID')) -> bool:
     '''
     Function to update database table rows from a source pandas DataFrame
 
@@ -66,6 +64,10 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
     if len(update_data_df) == 0:
         print('No data, skipping DB update...')
         return False
+
+    # get pk_cols as a list if it's not already one
+    if not isinstance(pk_cols, list):
+        pk_cols = list(pk_cols)
 
     # Start with a "base_df" to ensure that a row every Date & PondID combination (or Date only) is included in the db
     date_min = update_data_df['Date'].min()
@@ -88,16 +90,15 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
     
     # construct a statement to first insert primary key pairs into the table if they don't already exist (ignore if they do exist using INSERT OR IGNORE for sqlite)
     pk_vals = ', '.join(['(' + ', '.join([f'"{i}"' for i in sublist]) + ')' for sublist in update_data_df[pk_cols].values.tolist()])
-    '''
-    pk_vals formatted as string example for (Date, PondID): "('2023-09-01', '0401'), ('2023-09-02', '0401'), ... "
-    '''
+
+    ## pk_vals formatted as string example for (Date, PondID): "('2023-09-01', '0401'), ('2023-09-02', '0401'), ... "
     sql_insert_keys_stmt = f'INSERT OR IGNORE INTO {db_table_name} ({", ".join(pk_cols) if len(pk_cols) > 1 else pk_cols[0]}) VALUES {pk_vals};'
     sql_insert_keys_stmt = sqlalchemy.text(sql_insert_keys_stmt)
     
     # check that all columns being updated, as well as the primary key column arguments, are present in the database table. raise an exception if not
     db_table_col_names = get_db_table_columns(db_engine, db_table_name)
     if not all([col in db_table_col_names for col in list(update_data_df.columns)+pk_cols]): # add pk_cols to check list just in case columns were provided that do not exist in db table
-        raise Exception(f'ERROR: columns to update are not present in table: {db_table_name}!\nColumns: {update_data_df.columns.tolist()}')
+        raise ValueError(f'ERROR: columns to update are not present in table: {db_table_name}!\nColumns: {update_data_df.columns.tolist()}')
     
     # construct sql UPDATE FROM string
     # This works with Sqlite, but may need replaced if migrating to another database type
@@ -213,7 +214,7 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
         
         # since 'Date' and 'PondID' (if in table) columns do not need to be specified in params, add them to the col_names parameter 
         # if the col_names parameter is None (default), then all columns in the table are returned, so no need to append these
-        if col_names != None:
+        if col_names is not None:
             if pond_id_flag:
                 col_names.insert(0,'PondID')
             col_names.insert(0,'Date')
@@ -240,7 +241,7 @@ def query_data_table_by_date_range(db_name_or_engine: str|sqlalchemy.Engine, tab
             # raise Exception if output empty (unless when raise_exception_on_error = False)
             if len(output) == 0:
                 if raise_exception_on_error:
-                    raise Exception(f'ERROR: could not query data from db for db_name: {db_name_or_engine}, table_name: {table_name}, query_date_start: {query_date_start}, query_date_end: {query_date_end}, col_names: {col_names}')
+                    raise ValueError(f'ERROR: could not query data from db for db_name: {db_name_or_engine}, table_name: {table_name}, query_date_start: {query_date_start}, query_date_end: {query_date_end}, col_names: {col_names}')
                 else:
                     # return empty df (with col_names specified plus "Date" and "PondID") if query resulted in no data and raise_exception_on_error = False
                     return pd.DataFrame(columns=col_names)
@@ -260,7 +261,7 @@ def convert_df_date_cols(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.Dat
     It would be easier to just use a db that can handle datetime values...
     '''
     for col_name in df.columns:
-        ### TODO: use regex to find 'date', not surrounded by any other alphabetic characers (so not just part of another word)
+        ## TODO: use regex to find 'date', not surrounded by any other alphabetic characers (so not just part of another word) 
         if 'date' in col_name.lower():
             # when converting datetime to string
             # for inputting data into DB
@@ -269,7 +270,7 @@ def convert_df_date_cols(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.Dat
                 if is_datetime64_any_dtype(df.dtypes[col_name]):
                     df[col_name] = df[col_name].dt.strftime(dt_format)
                 else:
-                    raise Exception(f"ERROR: tried to convert {col_name} from datetime to string, but it is not in datetime format!\n('date' substring in column name will cause automatic conversion attempt')")
+                    raise ValueError(f"ERROR: tried to convert {col_name} from datetime to string, but it is not in datetime format!\n('date' substring in column name will cause automatic conversion attempt')")
             
             # when converting string to datetime
             # for extracting date from db (stored as strings)
@@ -277,7 +278,7 @@ def convert_df_date_cols(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.Dat
                 df[col_name] = pd.to_datetime(df[col_name], errors='coerce')
 
             else:
-                raise Exception('ERROR: no datetime conversion "option" parameter specified!')
+                raise ValueError('ERROR: invalid datetime conversion "option" parameter specified!')
         
     return df
         
@@ -294,7 +295,7 @@ def check_active_query(db_engine: sqlalchemy.Engine, pond_id: str, check_date: s
             date_str = d.strftime('%Y-%m-%d')
           #  fo_data = conn.execute(sqlalchemy.text('SELECT "Fo" FROM ponds_data WHERE ponds_data."Date" = :date'), date=date_str).fetchall()
             fo_data = conn.execute(sqlalchemy.select(ponds_data_table.c["Fo"]).where((ponds_data_table.c["Date"] == date_str) & (ponds_data_table.c["PondID"] == pond_id))).fetchall()
-            if fo_data[0][0] != None:
+            if fo_data[0][0] is not None:
                 return True
             temp_counter += 1
             print(f'TESTTESTTEST {temp_counter}:', fo_data)

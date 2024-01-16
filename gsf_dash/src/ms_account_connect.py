@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Type
 from datetime import datetime
 from O365 import Account, FileSystemTokenBackend
-from O365.excel import WorkBook
+from O365.excel import WorkBook, WorkSheet
 from .utils import load_setting
 
 class MSAccount(object):
@@ -110,7 +110,7 @@ class MSAccount(object):
         for (site_name, site_id) in self.sharepoint_site_ids.items():
             print(f'Site: {site_name} | ID: {site_id}')
         stop_flag = False
-        while stop_flag == False:
+        while stop_flag is False:
             user_choice = input('\nEnter name of site to browse: ')
             try: 
                 library = self.site_libs[user_choice]
@@ -121,7 +121,7 @@ class MSAccount(object):
         for item in library.get_items():
             print(f'{item} | ID: {item.object_id}')
         stop_flag = False
-        while stop_flag == False:
+        while stop_flag is False:
             if (user_choice := input('\nEnter folder (using ID) to list files, or "q" to quit: ')).lower() == 'q':
                 return None
             try:
@@ -217,7 +217,7 @@ class M365ExcelFileHandler:
         self._account = MSAccount() # get account connection 
         self._file_id = file_object_id
         self._file_obj = self._account.get_sharepoint_file_by_id(file_object_id)
-        if self._file_obj == None: # will be None if error fetching file
+        if self._file_obj is None: # will be None if error fetching file
             raise Exception(f'Could not load workbook for object_id: {file_object_id}')
         else:
             self._wb = WorkBook(self._file_obj) # get file as WorkBook obj from O365 module, for using API calls specific to excel files
@@ -313,12 +313,12 @@ class M365ExcelFileHandler:
             sheet.df = None # set df attribute to None if not loading the sheet data
         return sheet
 
-    def _load_excel_sheet_to_df_download(self, sheet: Type['O365.excel.WorkSheet'], **kwargs) -> pd.DataFrame:
+    def _load_excel_sheet_to_df_download(self, sheet: WorkSheet, **kwargs) -> pd.DataFrame:
         df = self._downloaded_ExcelFile.parse(sheet.name, **kwargs)
         print(f'loaded df for {sheet.name}...')
         return df
     
-    def _load_excel_sheet_to_df_api(self, sheet: Type['O365.excel.WorkSheet'], start_row: int|None = None, end_row: int|None = None) -> pd.DataFrame:
+    def _load_excel_sheet_to_df_api(self, sheet: WorkSheet, start_row: int|None = None, end_row: int|None = None) -> pd.DataFrame:
         '''
         - NOTE: VERY SLOW, PRETTY MUCH USELESS VERSUS DOWNLOADING AND PROCESSING FILE LOCALLY
         - Loads a M365 sheet into a dataframe by querying data from API
@@ -330,7 +330,7 @@ class M365ExcelFileHandler:
             - end_row (optional): the end row to extract data from (defaults to the last row of data)
         ERROR: does not correctly convert datetime values
         '''
-        if sheet.used_range != None:        
+        if sheet.used_range is not None:        
             _column_headers = sheet.get_range(f'{sheet.min_col}{sheet.min_row}:{sheet.max_col}{sheet.min_row}').values[0]
             sheet.column_to_name_map = {self._convert_numeric_col_to_alphabetic(idx):col_name for (idx, col_name) in enumerate(_column_headers, start=1) if col_name != ''}
             
@@ -400,7 +400,7 @@ class M365ExcelFileHandler:
                 
         return df
         
-    def _sheet_get_used_range_fixed(self, sheet: Type['O365.excel.WorkSheet']):
+    def _sheet_get_used_range_fixed(self, sheet: WorkSheet):
         ###### TODO contribute to O365 project to fix 'valuesOnly' parameter and filtering queries???
         url = sheet.build_url(sheet._endpoints.get('get_used_range'))
         url += '(valuesOnly=true)?$select=address'
@@ -420,7 +420,7 @@ class M365ExcelFileHandler:
         
         return trunc_range_str, max_row, max_col, min_row, min_col
     
-    def _find_last_row_brute_method(self, file_object_id: str, sheet: Type['O365.excel.WorkSheet']):
+    def _find_last_row_brute_method(self, file_object_id: str, sheet: WorkSheet):
         '''
         Get the last row through repeatedly requesting one row at a time from the MS Graph API
         *** THIS METHOD IS SLOW DUE TO REPEATED API REQUESTS FOR EACH SHEET, USE AS A LAST RESORT ONLY (should only be necessary for massive sheets that otherwise break the API) ***
@@ -496,7 +496,7 @@ class M365ExcelFileHandler:
                     empty_row = False
                     # if nonempty cells are found and have not found an empty row yet, jump ahead to double the current search row
                     ## TODO add a growth rate instead...slow growth while still speeding up to not overshoot initial target by too much?
-                    if empty_bound_found == False:
+                    if empty_bound_found is False:
                         row_search_low = row_search_high
                         row_search_high = row_search_high * 5
                     #if empty rows have been found, then only jump ahead by the diff between high and low vals
@@ -511,7 +511,7 @@ class M365ExcelFileHandler:
                 # to find last row slightly quicker (approx 0.5 - 1 second) due to reduced API queries needed
                 if row_search_high - row_search_low < 1000:
                     final_check_bound = f'A{row_search_low}:{col_search_bound}{row_search_high}'
-                    final_check_query = WorkBook_WorkSheet_obj.get_range(final_check_bound).values
+                    final_check_query = sheet.get_range(final_check_bound).values
                     final_empty_row_count = 0 
                     for row_idx, row in enumerate(final_check_query, start=1):
                         for val_idx, val in enumerate(row, start=1):
@@ -643,7 +643,7 @@ class EmailHandler:
         for attachment in attachments:
             fnam = attachment.get_filename()
             f_extension = fnam.split('.')[-1]
-            if fnam != None and f_extension in self.data_attachment_types: 
+            if fnam is not None and f_extension in self.data_attachment_types: 
                 print(f'Saving {fnam}...as {save_filename}.{f_extension}')
                 save_fnam= f'data_sources/{save_filename}.{f_extension}'
                 with open(save_fnam, 'wb') as f:

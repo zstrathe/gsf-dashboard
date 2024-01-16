@@ -1,15 +1,18 @@
 from abc import ABC, abstractmethod
+import functools
+import math
+import time
+import re
+from datetime import datetime
+from datetime import date as date_util
+from pathlib import Path
+from dateutil.rrule import rrule, DAILY
 import pandas as pd
 import numpy as np
-import functools
-import re
 import sqlalchemy
-import math
-from dateutil.rrule import rrule, DAILY 
-from datetime import datetime, date
-from pathlib import Path
+
 from .ms_account_connect import MSAccount, M365ExcelFileHandler
-from .db_utils import * 
+from .db_utils import init_db_table, query_data_table_by_date_range, check_if_table_exists, get_db_table_columns, update_table_rows_from_df 
 from .utils import load_setting, redirect_logging_to_file
 
 class Dataloader:
@@ -45,11 +48,11 @@ class Dataloader:
         while data_etl_queue:
             data_etl_class_obj = data_etl_queue.pop(0) # get first item in queue & remove it
             class_vars = vars(data_etl_class_obj)
-            if 'DEPENDENCY_CLASSES' in class_vars and class_vars['DEPENDENCY_CLASSES'] != None:
+            if 'DEPENDENCY_CLASSES' in class_vars and class_vars['DEPENDENCY_CLASSES'] is not None:
                 dep_classes = class_vars['DEPENDENCY_CLASSES'] # list of class names (strings)
                 reset_queue_flag = False
                 for c in dep_classes:
-                    if not c in completed_etl_name_list:
+                    if c not in completed_etl_name_list:
                         print(f'Detected dependency class needed, cannot run: {data_etl_class_obj.__name__}. Re-appending to end of processing queue!')
                         reset_queue_counter[data_etl_class_obj.__name__] += 1
                         if reset_queue_counter[data_etl_class_obj.__name__] > 5: # testing arbitrary limit to retry running a class...
@@ -84,8 +87,8 @@ class Dataloader:
                 init_db_table(self.db_engine, table_name)
        
         # use decorator from .utils.py to redirect stdout to a log file, only while building the DB
-        @redirect_logging_to_file(log_file_directory=Path(f'db/logs/'), 
-                                            log_file_name=f'{date.today().strftime("%y%m%d")}_rebuild_db_{self.db_engine_name}_{start_date.strftime("%y%m%d")}_{end_date.strftime("%y%m%d")}.log')
+        @redirect_logging_to_file(log_file_directory=Path('db/logs/'), 
+                                            log_file_name=f'{date_util.today().strftime("%y%m%d")}_rebuild_db_{self.db_engine_name}_{start_date.strftime("%y%m%d")}_{end_date.strftime("%y%m%d")}.log')
         def rebuild_db_run(start_date, end_date):
             #removed_cols_list = []
             # for d in rrule(DAILY, dtstart=start_date, until=end_date):
@@ -110,8 +113,8 @@ class Dataloader:
         
         try:
             data_class_obj = globals().get(class_name)
-        except:
-            raise Exception(f'Could not get class name: {class_name}! Wrong name provided?')
+        except KeyError:
+            raise ValueError(f'Could not get class name: {class_name}! Wrong name provided?')
         param_kwargs = {'db_engine': self.db_engine, 
                         'run_date_start': datetime(2023,9,1), 
                         'run_date_end': datetime(2023,12,28)}
@@ -170,11 +173,12 @@ class DBColumnsBase(ABC):
         self._MIN_LOOKBACK_DAYS = val
         
     @abstractmethod
-    def run():
+    def run(self) -> None:
+        '''
+        Extract, transform, and load data (Or just Extract and Load) into database table (self.OUT_TABLE_NAME)
+        '''
         pass
-        '''
-        Extract, transform, and load data into database table (self.OUT_TABLE_NAME)
-        '''
+        
 
     def _dl_sharepoint_files(self, file_identifier_str: list[str]|str) -> dict:
         '''
@@ -189,7 +193,7 @@ class DBColumnsBase(ABC):
                 - value: pathlib.Path object corresponding to downloaded file
         '''
         # convert to a list if only a single string param provided
-        if type(file_identifier_str) == str:
+        if isinstance(file_identifier_str, str):
             file_identifier_str = [file_identifier_str]
         
         # get file IDs from settings file, get only the values from the dict that's returned
@@ -247,7 +251,7 @@ class DailyDataLoad(DBColumnsBase):
         This function combines data between all sheets into single dataframe and loads into database 
         '''  
         excel_file = self._download_daily_data_file(specify_date=specify_date.strftime('%Y-%m-%d'))
-        if excel_file == None: # file doesn't exist or download error
+        if excel_file is None: # file doesn't exist or download error
             # if no daily data is found for specified date, then insert blank rows into database table (one for each Pond)
             excel_dataframes = {'empty data': pd.DataFrame(self.ponds_list, columns=['PondID'])}
         else:
@@ -272,7 +276,7 @@ class DailyDataLoad(DBColumnsBase):
         # extract data from each sheet create a composite dataframe for each pond
         for idx, (sheet_name, df) in enumerate(excel_dataframes.items()):
             print('Processing', sheet_name, '...')
-            ''' Column name cleaning '''
+            ### Column name cleaning 
             df = df.loc[:, ~df.columns.str.contains('^Unnamed')] # drop columns without a header, assumed to be empty or unimportant
             # remove information in parentheses from column names (some contain UOM info like "(g/L)")...maybe extract and store in a separate table for column UOM info...but just remove for now
             # additionally, keep everything if "(filter)" is in the name since that is a way of differentiating some measurements...may potentiall need to add more exceptions and make this more robust
@@ -281,24 +285,23 @@ class DailyDataLoad(DBColumnsBase):
             df.columns = df.columns.str.strip() # strip leading or trailing whitespace from column names
             df = df.rename(columns={'Notes': f'Notes-{sheet_name}', 'Comments': f'Comments-{sheet_name}', 'Pond': 'PondID', 'Pond ID': 'PondID', 'AFDW (Filter)': 'Filter AFDW'}) # append sheet_name to Notes and Comments fields since those will be distinct per each sheet, and rename "Pond ID" to "Pond" if necessary
 
-            ''' Skip sheet if there isn't a "PondID" column present
-                    - Do this after cleaning column names due to renaming "Pond" and "Pond ID" columns to "PondID"
-                    - might have issues if any sheets don't have the headers starting on the first row
-            '''
-            if not 'PondID' in df.columns:
+            ### Skip sheet if there isn't a "PondID" column present
+                    # - Do this after cleaning column names due to renaming "Pond" and "Pond ID" columns to "PondID"
+                    # - might have issues if any sheets don't have the headers starting on the first row
+            if 'PondID' not in df.columns:
                 print('Not a valid data sheet?? Skipping...')
                 continue
 
-            ''' Clean up "PondID" column values '''
+            ### Clean up "PondID" column values 
             df = df.dropna(subset='PondID') # drop rows with NaN values in the 'PondID' column
             df['PondID'] = df['PondID'].astype(str) # set Pond to string since some fields may be numerical, but need to perform string operations on this field
             df['Media Only'] = df['PondID'].apply(lambda label: True if "media only" in label.lower() else False) # extract "Media Only" field from the Pond label (for ex, might be: "1204 (Media Only)" in the source spreadsheet file)
             df['PondID'] = df['PondID'].apply(lambda val: (re.sub(r'\(media only\)', '', val, flags=re.IGNORECASE)).strip()) # remove the "Media Only" tag from pond labels if it's present
             
-            ''' Fill in rows with missing PondID's '''
+            ### Fill in rows with missing PondID's 
             [df.append({'PondID': pond_name}, ignore_index=True) for pond_name in self.ponds_list if pond_name not in df['PondID']] # Check that each Pond is listed, add it as a blank row if not
 
-            ''' Miscellaneous Column Cleaning '''
+            ### Miscellaneous Column Cleaning 
             df['Column'] = df['PondID'].str[-1] # get column number as a string (last digit of pond name)
             df['Date'] = specify_date #.strftime('%Y-%m-%d') # overwrite date column if it exists already, convert from datetime to string representation "yyyy-mm-dd"
             if 'Time Sampled' in df: # format "Time Sampled" column as a string if present (due to potential typos causing issues with some values reading as Datetime and some as strings)
@@ -306,14 +309,14 @@ class DailyDataLoad(DBColumnsBase):
             if 'Filter AFDW' in df:
                 df['Filter AFDW'] = df['Filter AFDW'].replace(0, None) # replace zero values in AFDW column with None, as zero values may cause issues with other calculated fields 
 
-            ''' Set "PondID" as index column of each sheet (required for properly merging sheets) and sort the df by PondID '''
+            ### Set "PondID" as index column of each sheet (required for properly merging sheets) and sort the df by PondID 
             df = df.set_index('PondID').sort_values(by='PondID')
             
             # for scorecard sheet, drop everything but the "Comments-Scorecard" column, since every other data point in this sheet is coming from another sheet via excel formula
             if sheet_name == 'Scorecard':
                 df = df[['Comments-Scorecard']]
             else:
-                ''' Drop columns not in allowed_cols list '''
+                ### Drop columns not in allowed_cols list
                 removed_cols = df.columns.difference(allowed_cols)
                 check_cols = ['Sodium Chloride', 'Sodium Bicarb', 'Magnesium Sulfate', 'Potassium Chloride', 'Calcium Chloride']
                 if any([check_name in removed_cols for check_name in check_cols]):
@@ -327,22 +330,21 @@ class DailyDataLoad(DBColumnsBase):
                     if col not in used_cols:
                         used_cols[col] = sheet_name
                     else:
-                        other_ = sheets_data[used_cols[col]][col][lambda x: (x!=0)&(x.isna() == False)] # get other column data (as a Pandas Series object) with 0's and NaN values removed for easier comparison
-                        current_ = df[col][lambda x: (x!=0)&(x.isna() == False)] # get current column data with 0's and NaN values removed for easier comparison
+                        other_ = sheets_data[used_cols[col]][col][lambda x: (x!=0)&(x.notna())] # get other column data (as a Pandas Series object) with 0's and NaN values removed for easier comparison
+                        current_ = df[col][lambda x: (x!=0)&(x.notna())] # get current column data with 0's and NaN values removed for easier comparison
     
-                        ''' test different method of checking column equivalence between sheets, not requiring exact match between sheets
-                        # loop through the current column index and check for equivalence of index: value pairs (should be pond names: value)
-                        # do this instead of df.equals() in case of unequal length indexes between sheets (in case of maybe a singleton item of data on one sheet), if the paired columns are equal then it should be fine
-                        nonmatch_flag=False
-                        for idx_val in current_.index: 
-                            if current_.loc[idx_val] != other_.loc[idx_val]:
-                                nonmatch_flag=True
-                                break
-                        if nonmatch_flag == False:
-                            print('Columns match!', used_cols[col], sheet_name, col)
-                        else:
-                            print('Column mismatch!', used_cols[col], sheet_name, col)
-                        '''
+                        # test different method of checking column equivalence between sheets, not requiring exact match between sheets
+                        # # loop through the current column index and check for equivalence of index: value pairs (should be pond names: value)
+                        # # do this instead of df.equals() in case of unequal length indexes between sheets (in case of maybe a singleton item of data on one sheet), if the paired columns are equal then it should be fine
+                        # nonmatch_flag=False
+                        # for idx_val in current_.index: 
+                        #     if current_.loc[idx_val] != other_.loc[idx_val]:
+                        #         nonmatch_flag=True
+                        #         break
+                        # if nonmatch_flag == False:
+                        #     print('Columns match!', used_cols[col], sheet_name, col)
+                        # else:
+                        #     print('Column mismatch!', used_cols[col], sheet_name, col)
                         
                         if other_.empty: # if the other column is completely empty, drop the other column and set the used_column to the current one being checked (sheet_name of the column used)
                             sheets_data[used_cols[col]] = sheets_data[used_cols[col]].drop([col], axis=1)
@@ -367,10 +369,8 @@ class DailyDataLoad(DBColumnsBase):
         
         # compute a column length check value in case of bugs from handling and dropping duplicate columns 
         # raise an exception in case of an error
-        all_columns = []
-        [[all_columns.append(label) for label in list(df.columns)] for df in sheets_data.values()]
         unique_columns = []
-        [unique_columns.append(label) for label in all_columns if label not in unique_columns]
+        [[unique_columns.append(label) for label in list(df.columns) if label not in unique_columns] for df in sheets_data.values()]
         column_length_check_ = len(unique_columns)
         
         # use functools.reduce to iteratively merge sheets, keeping all unique columns from each sheet (outer join), join on the 'PondID' column as primary key
@@ -382,7 +382,7 @@ class DailyDataLoad(DBColumnsBase):
         joined_df = joined_df.reset_index() #.set_index(['Date', 'PondID']) # reset index and create a multi-index (a compound primary key or whatever it's called for the SQL db)
         return joined_df, all_removed_cols
         
-    def _download_daily_data_file(self, specify_date: str = '') -> pd.ExcelFile | None:
+    def _download_daily_data_file(self, specify_date: str) -> pd.ExcelFile | None:
         '''
         Find and download the "Daily Data" .xlsx file by date (yyyy-mm-dd format)
         This method looks through "Daily Data" sharepoint directory organized by: YEAR --> MM_MONTH (ex: '04-April') --> FILE ("yyyymmdd Daily Data.xlsx")
@@ -394,7 +394,9 @@ class DailyDataLoad(DBColumnsBase):
             
         RETURNS -> pd.ExcelFile object (if successful download) or None (if failure)
         '''
-        specify_date = self.run_date if specify_date == '' else datetime.strptime(specify_date, "%Y-%m-%d")
+        # convert specify_date to datetime value
+        specify_date = datetime.strptime(specify_date, "%Y-%m-%d")
+
         folder_id = load_setting('folder_ids')['daily_data']
         for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
             # first look for the "year" directory
@@ -408,7 +410,7 @@ class DailyDataLoad(DBColumnsBase):
                             file_search = re.search(r"(?i)({})\s+(Daily Data).*(\.xlsx$)".format(specify_date.strftime('%y%m%d')), daily_file.name)
                             if file_search:
                                 print('FOUND FILE:', daily_file.name)
-                                dl_path_dir = Path(f'data_sources/tmp/')
+                                dl_path_dir = Path('data_sources/tmp/')
                                 dl_file_path = dl_path_dir / daily_file.name
                                 download_attempts = 5
                                 while True:
@@ -466,7 +468,7 @@ class ScorecardDataLoad(DBColumnsBase):
             for pond_id in self.ponds_list:
                 try: 
                     pond_df = sc_file.sheets_data.get(pond_id).df
-                except:
+                except AttributeError:
                     print(f'No scorecard data available for PondID: {pond_id}. Skipping...')
                     continue
                 pond_df.columns.values[0] = 'Date' # rename the first column to date, since it's always the pond id listed here on these sheets (but it's the date index col)
@@ -524,6 +526,7 @@ class CO2UsageLoad(DBColumnsBase):
         co2_consumption_df['total_co2_cost'] = co2_consumption_df['total_co2_usage'] * co2_cost_per_lb
         return co2_consumption_df
         
+
 class EPALoad(DBColumnsBase):
     OUT_TABLE_NAME = 'epa_data'
     OUT_COLUMNS = ['epa_val', 'epa_val_total_fa', 'measurement_date_actual', 'epa_actual_measurement'] # keep track of columns to output? not using anywhere else yet...
@@ -665,7 +668,7 @@ class EPALoad(DBColumnsBase):
             print('Printing output of row processing for debugging!')
             print(sample_label, end=' | ')
     
-        if type(sample_label) != str:
+        if not isinstance(sample_label, str):
             if debug_print:
                 print('ERROR: sample label not a string')
             return return_on_error
@@ -706,7 +709,7 @@ class EPALoad(DBColumnsBase):
                 return return_on_error
             return_vals['epa_val'] = float(epa_val)
             return_vals['epa_val_total_fa'] = float(epa_val_total_fa)
-        except:
+        except ValueError:
             if debug_print:
                 print('ERROR: "epa_val" or "epa_val_total_fa" is not a valid number')
             return return_on_error
@@ -722,6 +725,7 @@ class EPALoad(DBColumnsBase):
         if None in return_vals.values():
             raise Exception("ERROR: epa data all good but 'None' still in return values, missing a value assignment in dict?")
         return return_vals.values()
+
 
 class GetActiveStatus(DBColumnsBase):
     '''
@@ -778,7 +782,6 @@ class GetActiveStatus(DBColumnsBase):
             # then assume inactive status, and return False
             return False
         
-        query_begin_date = begin_date - pd.Timedelta(days=max_check_days)
         ref_df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
                                                 table_name='ponds_data', 
                                                 query_date_start=begin_date-pd.Timedelta(days=max_check_days), 
@@ -869,9 +872,13 @@ class MassVolumeHarvestableCalculations(DBColumnsBase):
                 calcs_dict['calc_mass'] = afdw_depth_to_mass(afdw, depth, pond_id)
                 
                 # calculate harvestable depth of pond (in inches), rounding down to nearest 1/8 inch
-                calcs_dict['harvestable_depth_inches'] = math.floor((((depth * afdw) - (TARGET_TOPOFF_DEPTH * TARGET_DENSITY_AFTER_TOPOFF)) / afdw)*8)/8
-                if calcs_dict['harvestable_depth_inches'] < 0:
-                    calcs_dict['harvestable_depth_inches'] = 0
+                if afdw >= MIN_HARVEST_DENSITY:
+                    harvestable_depth_inches = math.floor((((depth * afdw) - (TARGET_TOPOFF_DEPTH * TARGET_DENSITY_AFTER_TOPOFF)) / afdw)*8)/8
+                    if harvestable_depth_inches < 0:
+                        harvestable_depth_inches = 0
+                else:
+                    harvestable_depth_inches = 0
+                calcs_dict['harvestable_depth_inches'] = harvestable_depth_inches
                     
                 # calculate harvestable volume (in gallons) based on harvestable depth and conversion factor (35,000) to gallons. 
                 calcs_dict['harvestable_gallons'] = calcs_dict['harvestable_depth_inches'] * 35000 
@@ -983,7 +990,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # .bfill() and ffill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with forward filling so ensure that 5 day limit is applied
             # first, for any missing vals where a harvest or split has been calculated: replace those vals with a temporary placeholder string
             # # only check mass for checking the columns to fill, since a missing mass would also indicate missing liters/normalized liters
-            tmp_placeholder_mask = (calc_df['PondID'] == pond_id) & ((calc_df['est_harvested'] > 0) | (calc_df['est_split_out'] > 0)) & ((pd.isna(calc_df['calc_mass_nanno_corrected']) == True) | (calc_df['calc_mass_nanno_corrected'] == 0)) 
+            tmp_placeholder_mask = (calc_df['PondID'] == pond_id) & ((calc_df['est_harvested'] > 0) | (calc_df['est_split_out'] > 0)) & ((pd.isna(calc_df['calc_mass_nanno_corrected'])) | (calc_df['calc_mass_nanno_corrected'] == 0)) 
             calc_df.loc[tmp_placeholder_mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = '_tmp_placeholder_for_ffill'
             
             # second, backfill values (filling stops when it hits a row with the placeholder string)
@@ -1230,7 +1237,7 @@ class CalcHarvestedSplitMass(DBColumnsBase):
             # first mark any values that are both missing and on day's marked as "H"/"S"/"I", as 'tmp_for_ffill'
             # then backfill all missing values 
             # then replace 'tmp_for_ffill' values with None, and forward fill those
-            output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, :].apply(lambda df_row: 'tmp_for_ffill' if (pd.isna(df_row['calc_mass_nanno_corrected'])) & (df_ref_data[(df_ref_data['PondID'] == df_row['PondID']) & (df_ref_data['Date'] == df_row['Date'])]['Split Innoculum'].iloc[0] != None) else df_row['calc_mass_nanno_corrected'], axis=1)
+            output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, :].apply(lambda df_row: 'tmp_for_ffill' if (pd.isna(df_row['calc_mass_nanno_corrected'])) & (df_ref_data[(df_ref_data['PondID'] == df_row['PondID']) & (df_ref_data['Date'] == df_row['Date'])]['Split Innoculum'].iloc[0] is not None) else df_row['calc_mass_nanno_corrected'], axis=1)
             output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].bfill()
             output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].replace('tmp_for_ffill', None)
             output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].ffill()
@@ -1298,6 +1305,7 @@ class CalcDaysSinceHarvestedSplit(DBColumnsBase):
         out_df = ref_df[['Date', 'PondID']]
         # set index to Date so for updating data from a temp df, so that Date-index serves as "key" column to join data on
         out_df = out_df.set_index('Date')
+        ref_df = ref_df.set_index('Date')
 
         # get a column of 1's where active_status==True and NOT harvested on day 
         ref_df['_active_and_not_harvested_split'] = ref_df.apply(lambda row: 1 if row['active_status'] == True and (pd.isna(row['est_harvested']) and pd.isna(row['est_split_out'])) else None, axis=1)
@@ -1305,10 +1313,13 @@ class CalcDaysSinceHarvestedSplit(DBColumnsBase):
         # get cumulative sum for concurrent days of active_status=True and not harvested/split
         # ref for reset df cumsum() with None row vals: https://stackoverflow.com/questions/55147225/pandas-dataframe-cumsum-reset-on-nan
         for pond_id in ref_df['PondID'].unique():
-            _tmp_df = ref_df[ref_df['PondID'] == pond_id].copy().set_index('Date')
+            _tmp_df = ref_df[ref_df['PondID'] == pond_id].copy() #.set_index('Date')
             _tmp_df['days_since_harvested_split'] = _tmp_df['_active_and_not_harvested_split'].groupby(_tmp_df['_active_and_not_harvested_split'].isna().cumsum()).cumsum().fillna(0, downcast='infer')
             # update 'days_since_harvest' in out_df for pond_id           
-            out_df.loc[out_df['PondID'] == pond_id, 'days_since_harvested_split'] = _tmp_df['days_since_harvested_split']
+            out_df.loc[out_df['PondID'] == pond_id, ['active_status', 'days_since_harvested_split']] = _tmp_df[['active_status', 'days_since_harvested_split']]
+
+        # set days where active_status == False to None (otherwise, they are set to 0 from the last step, and that implies that the pond is active)
+        out_df.loc[out_df['active_status'] == False, 'days_since_harvested_split'] = None
 
         # reset index of out_df so that 'Date' is a column again
         out_df = out_df.reset_index()
@@ -1537,8 +1548,8 @@ class HarvestDataLoad(DBColumnsBase):
                     # and convert Time Open/Time Closed to str (because datetime vals aren't compatible with sqlite and the columns can just be converted whenever needed)
                     date_df = date_ExcelFile.parse(sheet_name=f'{d.strftime("%y%m%d")} ({size_tag})', header=4, converters={'Pond ID':str, 'Notes': str})
                     d_success = True
-                except:
-                    print('Could not load harvest data for:', d.strftime('%y/%m/%d'), size_tag)
+                except Exception as e:
+                    print(f'ERROR: {e} exception: Could not load harvest data for:', d.strftime('%y/%m/%d'), size_tag)
                     d_success = False
 
                 if d_success:
@@ -1614,7 +1625,7 @@ class HarvestDataLoad(DBColumnsBase):
                     file_search = re.search(r"(?i)({})\s+(Pond Harvest Log).*(\.xlsx$)".format(specify_date.strftime('%m_%B')), month_file.name)
                     if file_search:
                         print('FOUND FILE:', month_file.name)
-                        dl_path_dir = Path(f'data_sources/tmp/')
+                        dl_path_dir = Path('data_sources/tmp/')
                         dl_file_path = dl_path_dir / month_file.name
                         download_attempts = 5
                         while True:
