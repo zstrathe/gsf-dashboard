@@ -12,9 +12,12 @@ def get_db_table_columns(db_engine: sqlalchemy.Engine, table_name) -> list:
     return [col.name for col in inspector.columns]
 
 def check_if_table_exists(db_engine: sqlalchemy.Engine, table_name: str) -> bool:
+    """ Check if a table exists in database """
     return sqlalchemy.inspect(db_engine).has_table(table_name) # boolean value depending on table_name existence in db
 
 def init_db_table(db_engine: sqlalchemy.Engine, table_name: str) -> None:
+    """ Helper function to initialize a database table
+            -Looks for {table_name}.create_table file in ./setting/db_schemas directory which contains a CREATE TABLE IF NOT EXISTS statement for sqlite"""
     table_schemas_path = Path('./settings/db_schemas')
     table_schemas_dir = os.listdir(table_schemas_path)
     if f'{table_name}.create_table' not in table_schemas_dir:
@@ -41,6 +44,7 @@ def init_db_table(db_engine: sqlalchemy.Engine, table_name: str) -> None:
         print('Successfully created table!')
 
 def get_primary_keys(db_table: sqlalchemy.Table) -> list:
+    ''' Function to extract the primary keys from a sqlite database table '''
     inspector = sqlalchemy.inspect(db_table)
     # Inspector.primary_key -> Column objects that are primary keys for table -> column.name
     return [k.name for k in inspector.primary_key]
@@ -131,6 +135,7 @@ def update_table_rows_from_df(db_engine: sqlalchemy.Engine, db_table_name: str, 
             return False
  
 def load_table(db_engine: sqlalchemy.Engine, table_name: str) -> sqlalchemy.Table:
+    ''' Helper function to load a table / reflect the metadata '''
     metadata = sqlalchemy.MetaData()
     return sqlalchemy.Table(table_name, metadata, autoload_with=db_engine)
     
@@ -271,7 +276,7 @@ def convert_df_date_cols(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.Dat
                     df[col_name] = df[col_name].dt.strftime(dt_format)
                 else:
                     raise ValueError(f"ERROR: tried to convert {col_name} from datetime to string, but it is not in datetime format!\n('date' substring in column name will cause automatic conversion attempt')")
-            
+           
             # when converting string to datetime
             # for extracting date from db (stored as strings)
             elif option == 'TO_DT':
@@ -282,20 +287,20 @@ def convert_df_date_cols(df, option: str, dt_format: str = '%Y-%m-%d') -> pd.Dat
         
     return df
         
-def check_active_query(db_engine: sqlalchemy.Engine, pond_id: str, check_date: str, num_prior_days_to_check: int = 5) -> None:
-    check_date = datetime.strptime(check_date, '%Y-%m-%d')
-    earliest_check_date = check_date - timedelta(days=num_prior_days_to_check)
-    check_date_range = rrule(DAILY, dtstart=earliest_check_date, until=check_date)
-    print(check_date_range)
-    ponds_data_table = load_table(db_engine, 'ponds_data')
-    temp_counter = 0
-    with db_engine.begin() as conn:
-        #for d in rrule(DAILY, dtstart=check_date, until=check_date - timedelta(days=num_prior_days_to_check)):   
-        for d in check_date_range[::-1]:
-            date_str = d.strftime('%Y-%m-%d')
-          #  fo_data = conn.execute(sqlalchemy.text('SELECT "Fo" FROM ponds_data WHERE ponds_data."Date" = :date'), date=date_str).fetchall()
-            fo_data = conn.execute(sqlalchemy.select(ponds_data_table.c["Fo"]).where((ponds_data_table.c["Date"] == date_str) & (ponds_data_table.c["PondID"] == pond_id))).fetchall()
-            if fo_data[0][0] is not None:
-                return True
-            temp_counter += 1
-            print(f'TESTTESTTEST {temp_counter}:', fo_data)
+# def check_active_query(db_engine: sqlalchemy.Engine, pond_id: str, check_date: str, num_prior_days_to_check: int = 5) -> None:
+#     check_date = datetime.strptime(check_date, '%Y-%m-%d')
+#     earliest_check_date = check_date - timedelta(days=num_prior_days_to_check)
+#     check_date_range = rrule(DAILY, dtstart=earliest_check_date, until=check_date)
+#     print(check_date_range)
+#     ponds_data_table = load_table(db_engine, 'ponds_data')
+#     temp_counter = 0
+#     with db_engine.begin() as conn:
+#         #for d in rrule(DAILY, dtstart=check_date, until=check_date - timedelta(days=num_prior_days_to_check)):   
+#         for d in check_date_range[::-1]:
+#             date_str = d.strftime('%Y-%m-%d')
+#           #  fo_data = conn.execute(sqlalchemy.text('SELECT "Fo" FROM ponds_data WHERE ponds_data."Date" = :date'), date=date_str).fetchall()
+#             fo_data = conn.execute(sqlalchemy.select(ponds_data_table.c["Fo"]).where((ponds_data_table.c["Date"] == date_str) & (ponds_data_table.c["PondID"] == pond_id))).fetchall()
+#             if fo_data[0][0] is not None:
+#                 return True
+#             temp_counter += 1
+#             print(f'TESTTESTTEST {temp_counter}:', fo_data)
