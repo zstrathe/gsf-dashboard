@@ -1,5 +1,16 @@
 # Green Stream Farms Dashboard 
-A module for ETL & ELT processes to extract data from various sources (mostly Excel files stored on MS Sharepoint), and to generate daily "dashboard" reports from the stored data.
+A module for ELT (Extract-Load-Transform) processes to extract data from various sources (mostly Excel files stored on MS Sharepoint), and to generate daily "dashboard" reports from the stored data. 
+  
+  -DB Table structure:
+    - ponds_data: measured data for ponds, recorded daily
+    - daily_processing_data: measured data from processing, recorded daily
+    - daily_weather_data: measured data from weather, recorded daily (sourced from meteostat)
+    - epa_data: measured data for ponds, recorded weekly
+      - this data is also calculated, as values between measurement dates are filled-in for ease of analytics reporting
+    - co2_usage: combination of measured data (co2 usage per day in lbs) and calculated data (estimated cost of the co2 usage per day)
+    - ponds_data_calculated: calculated data derived from measured data
+    - ponds_data_expenses: calculated data (of financial expenses) derived from measured data - kept separate from ponds_data_calculated due to different subject matter (operations vs finance)
+    - ponds_data_calculated_aggregate: calculated aggregate data derived from measured data
 
 ## Components:
 ## automation/dl_gen_email.sh:
