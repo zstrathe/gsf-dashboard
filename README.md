@@ -1,7 +1,6 @@
 # Green Stream Farms Dashboard 
 A module for ELT (Extract-Load-Transform) processes to extract data from various sources (mostly Excel files stored on MS Sharepoint), and to generate daily "dashboard" reports from the stored data. 
-  
-  -DB Table structure:
+  - DB Tables:
     - ponds_data: measured data for ponds, recorded daily
     - daily_processing_data: measured data from processing, recorded daily
     - daily_weather_data: measured data from weather, recorded daily (sourced from meteostat)
