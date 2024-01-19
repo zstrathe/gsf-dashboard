@@ -957,7 +957,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
                                                  table_name='ponds_data_calculated', 
                                                  query_date_start=start_date, 
                                                  query_date_end=end_date, 
-                                                 col_names=['active_status', 'est_harvested', 'est_split_in', 'est_split_out', 'calc_mass_nanno_corrected'], 
+                                                 col_names=['active_status', 'est_harvested_mass', 'est_split_in_mass', 'est_split_out_mass', 'calc_mass_nanno_corrected'], 
                                                  check_safe_date=True)
 
         # join the queried dataframes
@@ -990,7 +990,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # .bfill() and ffill() doesn't have an option for date-aware filling, so ensure that any dates aren't filtered out with forward filling so ensure that 5 day limit is applied
             # first, for any missing vals where a harvest or split has been calculated: replace those vals with a temporary placeholder string
             # # only check mass for checking the columns to fill, since a missing mass would also indicate missing liters/normalized liters
-            tmp_placeholder_mask = (calc_df['PondID'] == pond_id) & ((calc_df['est_harvested'] > 0) | (calc_df['est_split_out'] > 0)) & ((pd.isna(calc_df['calc_mass_nanno_corrected'])) | (calc_df['calc_mass_nanno_corrected'] == 0)) 
+            tmp_placeholder_mask = (calc_df['PondID'] == pond_id) & ((calc_df['est_harvested_mass'] > 0) | (calc_df['est_split_out_mass'] > 0)) & ((pd.isna(calc_df['calc_mass_nanno_corrected'])) | (calc_df['calc_mass_nanno_corrected'] == 0)) 
             calc_df.loc[tmp_placeholder_mask, ['liters', 'normalized_liters', 'calc_mass_nanno_corrected']] = '_tmp_placeholder_for_ffill'
             
             # second, backfill values (filling stops when it hits a row with the placeholder string)
@@ -1007,7 +1007,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # get "harvest corrected (hc)" values for liters, normalized_liters, and calc_mass_nanno_corrected (next day val, if day has been noted as a harvest with a calculated est_harvested val > 0)
             # per Kurt, this is so that variance in pond levels and density is factored out of growth calcs
             def _get_harvest_corrected_val(row, col_name):
-                if (not pd.isna(row['est_harvested']) and row['est_harvested'] > 0) or (not pd.isna(row['est_split_out']) and row['est_split_out'] > 0):
+                if (not pd.isna(row['est_harvested_mass']) and row['est_harvested_mass'] > 0) or (not pd.isna(row['est_split_out_mass']) and row['est_split_out_mass'] > 0):
                     rval_df = calc_df.loc[mask, col_name].shift(-1, freq='D')  
                     if row.name in rval_df:
                         return rval_df.loc[row.name]
@@ -1019,18 +1019,18 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             calc_df.loc[mask, 'hc_normalized_liters'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'normalized_liters'), axis=1)
             calc_df.loc[mask, 'hc_calc_mass_nanno_corrected'] = calc_df.loc[mask, :].apply(lambda row: _get_harvest_corrected_val(row, 'calc_mass_nanno_corrected'), axis=1)
            
-            # fill in n/a values in 'est_harvested', 'est_split_in', and 'est_split_out' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
-            calc_df.loc[mask, 'est_harvested'] = calc_df.loc[mask, 'est_harvested'].fillna(0) 
-            calc_df.loc[mask, 'est_split_in'] = calc_df.loc[mask, 'est_split_out'].fillna(0)
-            calc_df.loc[mask, 'est_split_out'] = calc_df.loc[mask, 'est_split_out'].fillna(0) 
+            # fill in n/a values in 'est_harvested_mass', 'est_split_in_mass', and 'est_split_out_mass' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
+            calc_df.loc[mask, 'est_harvested_mass'] = calc_df.loc[mask, 'est_harvested_mass'].fillna(0) 
+            calc_df.loc[mask, 'est_split_in_mass'] = 0 #calc_df.loc[mask, 'est_split_out_mass'].fillna(0)
+            calc_df.loc[mask, 'est_split_out_mass'] = calc_df.loc[mask, 'est_split_out_mass'].fillna(0) 
 
             # calculate rolling harvested amount for past 7-days
             # since the 'calc_mass_nanno_corrected' value on any day should be inclusive of the prior 6-days of activity (harvests/splits),
             # and the calc_mass_nanno_corrected val does not reflect harvests/splits on that day (i.e., measurements are "generally" taken before these activities on any given day)
             # then get a 6-day rolling sum of harvests and net splits which does not include the current day (by shifting by 1 day)
             # without doing this, then harvests/splits would be double counted in the overall mass comparison
-            calc_df.loc[mask, 'rolling_7d_harvested_mass_out'] = calc_df.loc[mask, 'est_harvested'].shift(1).rolling('6d').sum()
-            calc_df.loc[mask, 'rolling_7d_split_net_mass_out'] = calc_df.loc[mask, 'est_split_out'].shift(1).rolling('6d').sum() - calc_df.loc[mask, 'est_split_in'].shift(1).rolling('6d').sum()
+            calc_df.loc[mask, 'rolling_7d_harvested_mass_out'] = calc_df.loc[mask, 'est_harvested_mass'].shift(1).rolling('6d').sum()
+            calc_df.loc[mask, 'rolling_7d_split_net_mass_out'] = calc_df.loc[mask, 'est_split_out_mass'].shift(1).rolling('6d').sum() - calc_df.loc[mask, 'est_split_in_mass'].shift(1).rolling('6d').sum()
             
             # get the 'liters', 'normalized liters' from 7-days ago, using "harvest corrected" columns
             calc_df.loc[mask, 'growth_ref_prev_liters_7d'] = calc_df.loc[mask, 'hc_liters'].shift(7, freq='D') 
@@ -1120,37 +1120,155 @@ class CalcMassGrowthAggregate(DBColumnsBase):
 
 class CalcHarvestedSplitMass(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
-    DEPENDENCY_CLASSES = ['DailyDataLoad', 'GetActiveStatus', 'HarvestDataLoad', 'MassVolumeHarvestableCalculations'] # TODO add Split data once it's added to db
+    DEPENDENCY_CLASSES = ['DailyDataLoad', 'GetActiveStatus', 'HarvestDataLoad', 'MassVolumeHarvestableCalculations'] # TODO add Split data class once it's added to db
    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
     def run(self):
-        hs_df = self._calc_harvested_split_mass(start_date=self.run_date_start, end_date=self.run_date_end) # gets df with 'active_status' col
+        h_s_dates_df = self._get_harvested_split_dates(start_date=self.run_date_start, end_date=self.run_date_end)
         
-        backup_estimates_df = self._calc_harvested_split_mass_backup_estimate(start_date=self.run_date_start, end_date=self.run_date_end)
+        hs_df = self._calc_harvested_split_mass_differential_actual(hs_dates_df=h_s_dates_df, start_date=self.run_date_start, end_date=self.run_date_end) # gets df with 'active_status' col
+        
+        backup_estimates_df = self._calc_harvested_split_from_volume_logs(start_date=self.run_date_start, end_date=self.run_date_end)
+        backup_estimates_df = backup_estimates_df.rename(columns={'est_harvested_mass': 'est_harvested_mass_backup', 'est_split_out_mass': 'est_split_out_mass_backup'})
 
         # merge and add backup estimated mass values where needed (i.e., wherever the backup method calculated an amount but nothing exists on the primary df)
         hs_df = pd.merge(hs_df, backup_estimates_df, on=['Date', 'PondID'], how='outer')
         
-        # get the previous and next est_harvested and est_split values for each date
-        # get these because, in some cases, the "backup" value is off by +-1 day, and would result in duplicate values
-        for pond_id in self.ponds_list:
-            pond_id_mask = hs_df['PondID'] == pond_id
-            hs_df.loc[pond_id_mask, ['prev_est_h', 'prev_est_s']] = hs_df.loc[pond_id_mask, ['est_harvested', 'est_split_out']].shift(1)
-            hs_df.loc[pond_id_mask, ['next_est_h', 'next_est_s']] = hs_df.loc[pond_id_mask, ['est_harvested', 'est_split_out']].shift(-1)
         # if there is no value (for est_harvested and est_split_out) for the current day, previous day, and next day,
         # then use the backup value (will be None unless a backup value exists)
-        hs_df['est_harvested'] = hs_df.apply(lambda row: row['est_harvested_backup'] if (pd.isna(row['est_harvested']) & pd.isna(row['prev_est_h']) & pd.isna(row['next_est_h'])) else row['est_harvested'], axis=1)
-        hs_df['est_split_out'] = hs_df.apply(lambda row: row['est_split_out_backup'] if (pd.isna(row['est_split_out']) & pd.isna(row['prev_est_s']) & pd.isna(row['next_est_s'])) else row['est_split_out'], axis=1)
-        
+        hs_df['est_harvested_mass'] = hs_df.apply(lambda row: row['est_harvested_mass_backup'] if (pd.isna(row['est_harvested_mass']) & (~pd.isna(row['Harvested-Split']))) else row['est_harvested_mass'], axis=1)
+        hs_df['est_split_out_mass'] = hs_df.apply(lambda row: row['est_split_out_mass_backup'] if (pd.isna(row['est_split_out_mass']) & (~pd.isna(row['Harvested-Split']))) else row['est_split_out_mass'], axis=1)
+       
         # filter to output columns
-        hs_df = hs_df[['Date', 'PondID', 'est_harvested', 'est_split_out']]
+        hs_df = hs_df.loc[hs_df['Date'].between(self.run_date_start, self.run_date_end), ['Date', 'PondID', 'est_harvested_mass', 'est_split_out_mass']]
         
         # update the db (calling a function from .db_utils.py)
         update_table_rows_from_df(db_engine=self.db_engine, db_table_name=self.OUT_TABLE_NAME, update_data_df=hs_df)
         
-    def _calc_harvested_split_mass(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def _get_harvested_split_dates(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        '''Method to query dates on which a harvest or split has occured
+            - Use measured harvest & split volumes (obviously)
+            - Add additional check on 'Scorecard' file data where 'H' or 'S' or 'HC' is noted 
+            (this is because sometimes one of the other mistakenly doesn't get recorded, 
+            and this ensures a more robust estimate of actual harvested amounts)
+
+        output: 
+          - Dataframe: 
+            - 'Date': datetime
+            - 'PondID': string
+            - 'Harvested-Split': string:
+                - 'H' : if harvested
+                - 'HC': if harvested completely
+                - 'S': if split
+                - 'SC': if split completely 
+        '''
+        df = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                      table_name='ponds_data', 
+                                                      query_date_start=start_date, 
+                                                      # add one day to db query, to try checking the next day \
+                                                      # 'Split Innoculum' value for the last date in output range
+                                                      query_date_end=end_date + pd.Timedelta(days=1), 
+                                                      col_names=['Split Innoculum', 'harvest_volume', 'split_volume_out'])
+        for pond_id in self.ponds_list:
+            mask = df['PondID'] == pond_id
+            df.loc[mask, 'Split Innoculum Next'] = df.loc[mask, 'Split Innoculum'].shift(-1)
+        
+        # conditions
+        conditions = [
+            (pd.isna(df['harvest_volume'])) & (pd.isna(df['split_volume_out'])) & ((pd.isna(df['Split Innoculum'])) | (df['Split Innoculum'].str.upper() == 'I')),
+            # check conditions on 'Split Innoculum' column first since it should be noted whether harvested or harvested completely
+            (df['Split Innoculum'].str.upper() == 'HC') | ((df['Split Innoculum Next'].str.upper() == 'I') & (df['Split Innoculum'].str.upper() == 'H')), # harvested completely condition
+            (df['Split Innoculum Next'].str.upper() == 'I') & ((pd.isna(df['Split Innoculum']))), # backup harvested completely condition, when nothing noted but inactive the next day (could also be a split, but attributing to harvest is safer)                                         
+            df['Split Innoculum'].str.upper() == 'H', # harvested condition
+            (df['Split Innoculum'].str.upper() == 'SC') | ((df['Split Innoculum Next'].str.upper() == 'I') & (df['Split Innoculum'].str.upper() == 'S')), # split completely condition
+            df['Split Innoculum'].str.upper() == 'S', # split condition
+            df['harvest_volume'] > 0, # backup 'harvest' condition
+            df['split_volume_out'] > 0 # backup 'split' condition
+        ]
+        choices = [None, 'HC', 'HC', 'H', 'SC', 'S', 'H', 'S']
+        df['Harvested-Split'] = np.select(conditions, choices, default='ERROR')
+        
+        # assert that np.select worked / if any columns get the default 'ERROR' condition, then something is wrong
+        assert(len(df[df['Harvested-Split'] == 'ERROR']) == 0)
+        
+        df = df[['Date', 'PondID', 'Harvested-Split']]
+        return df
+
+    def _calc_harvested_split_mass_differential_actual(self, hs_dates_df: pd.DataFrame, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+        '''
+        Method to get an estimate of harvested/split mass using the delta of calculated mass between 2 days
+        
+        params:
+            - hs_dates_df: pd.DataFrame: dataframe containing 'Harvested-Split' column containing either nothing, 'H', 'HC', 'S', or 'SC'
+                        (from self._get_harveted_split_dates currently)
+            - start_date: datetime: start of date range to output
+            - end_date: datetime: end of date range to output
+        
+        output: 
+          - Dataframe: 
+            - 'Date': datetime
+            - 'PondID': string
+            - 'est_harvested_mass': float : estimated harvested mass based on differential in estimated mass between two dates
+            - 'est_split_out_mass': float: estimated "split out" mass ""
+        '''
+
+        df_mass_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
+                                                       table_name='ponds_data_calculated', 
+                                                       query_date_start=start_date, 
+                                                       # always get one day after the end_date, as it would be necessary \
+                                                       # to get the change in mass for the last date in output range 
+                                                       query_date_end=end_date + pd.Timedelta(days=1),
+                                                       col_names=['calc_mass_nanno_corrected'],
+                                                       # use check_safe_date in case of the end_date being outside \
+                                                       # the date range available in the db table
+                                                       check_safe_date=True)
+        
+        df = pd.merge(df_mass_data, hs_dates_df, on=['Date', 'PondID'], how='outer')
+           
+        # set Date as index so that .shift() will work properly with df masked by PondID
+        df = df.set_index('Date')
+        for pond_id in df['PondID'].unique():
+            # get df mask with only values for specific PondID
+            mask = df['PondID'] == pond_id
+            # shift to get the next day mass relative to each pond/date
+            df.loc[mask, '_tmp_next_day_mass'] = df.loc[mask, 'calc_mass_nanno_corrected'].shift(-1)
+        df = df.reset_index()
+       
+        # apply a function to calculate the 'est_harvested_mass', 'est_split_out_mass' by getting the difference \
+        # between current day estimated/calculated mass and the next day mass, and additionally filter out "bad" \
+        # values for the 'Harvested-Split' column (found by having a negative value from the difference)
+        def apply_h_s_mass(row):
+            if row['Harvested-Split'] == 'H':
+                return_val =  [row['calc_mass_nanno_corrected']-row['_tmp_next_day_mass'], None]
+            elif row['Harvested-Split'] == 'HC':
+                return_val = [row['calc_mass_nanno_corrected'], None]
+            elif row['Harvested-Split'] == 'S':
+                return_val = [None, row['calc_mass_nanno_corrected']-row['_tmp_next_day_mass']]
+            elif row['Harvested-Split'] == 'SC':
+                return_val = [None, row['calc_mass_nanno_corrected']]
+            else:
+                return_val = [None, None]
+            
+            # if either of the values for est_harvested_mass or est_split_out_mass are < 0 \ 
+            # then set them to None, and also set the 'Harvested-Split' column to None \
+            # because it's obviously not correct that this date is a harvest or split \
+            # due to the negative mass change
+            if any([(v != None and v < 0) for v in return_val]):
+                return_val = [None, None, None]
+            else: 
+                # add col to beginning of return val as-is if no negative values exist
+                return_val.insert(0, row['Harvested-Split'])
+            
+            return return_val
+        df[['Harvested-Split', 'est_harvested_mass', 'est_split_out_mass']] = df.apply(lambda row: apply_h_s_mass(row), axis=1, result_type='expand')
+        
+        # filter to the output (function param) date range, and output columns
+        df = df.loc[df['Date'].between(start_date, end_date),['Date', 'PondID', 'Harvested-Split', 'est_harvested_mass', 'est_split_out_mass']]
+        return df
+
+    def _calc_harvested_split_from_volume_logs(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
         # query density and harvest volume (in gallons)
         # add 5 days to beginning of query for additional data if needed to fill in missing values
         df_harvested = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
@@ -1159,8 +1277,9 @@ class CalcHarvestedSplitMass(DBColumnsBase):
                                                       query_date_end=end_date, 
                                                       col_names=['Filter AFDW', '% Nanno', 'harvest_volume', 'split_volume_out'], 
                                                       check_safe_date=True)
+        
         df_active = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
-                                                      table_name='ponds_data_calculated', 
+                                                      table_name='ponds_data_calculated',
                                                       query_date_start=start_date-pd.Timedelta(days=5), 
                                                       query_date_end=end_date, 
                                                       col_names=['active_status'], 
@@ -1201,83 +1320,15 @@ class CalcHarvestedSplitMass(DBColumnsBase):
         
         # calculate est_harvested in Kg for
         # AFDW units = g/L, so convert harvested gallons to liters, then multiply by the AFDW. Divide result by 1000 for Kg
-        df_harvested['est_harvested'] = (df_harvested['Filter AFDW'] * df_harvested['% Nanno'] * df_harvested['harvest_volume'] * GALLONS_TO_LITERS) / 1000    
-        df_harvested['est_split_out'] = None # TODO add est_split_out calc after split volumes added to DB
+        df_harvested['est_harvested_mass'] = (df_harvested['Filter AFDW'] * df_harvested['% Nanno'] * df_harvested['harvest_volume'] * GALLONS_TO_LITERS) / 1000    
+        df_harvested['est_split_out_mass'] = None # TODO add est_split_out calc after split volumes added to DB
 
-        # filter to the output date range
+        # filter to the output date range & output columns
         df_harvested = df_harvested[df_harvested['Date'].between(start_date, end_date)]
-        
-        return df_harvested[['Date', 'PondID', 'est_harvested', 'est_split_out']]
-        
-    def _calc_harvested_split_mass_backup_estimate(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
-        '''
-        Method to get an estimate of harvested/split mass using the delta of calculated mass between two days
-        USING AS A BACKUP METHOD, FOR WHEN HARVESTED VOLUME DATA WAS ERRONEOUSLY NOT RECORDED
-        '''
-        df_ref_data = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
-                                                     table_name='ponds_data', 
-                                                     query_date_start=start_date, 
-                                                     query_date_end=end_date, 
-                                                     col_names=['Split Innoculum'])
-        df_data_calcs = query_data_table_by_date_range(db_name_or_engine=self.db_engine, 
-                                                       table_name='ponds_data_calculated', 
-                                                       query_date_start=start_date, 
-                                                       query_date_end=end_date, 
-                                                       col_names=['calc_mass_nanno_corrected'])
-           
-        output_df = df_data_calcs.copy()
-        for pond_id in output_df['PondID'].unique():
-            # get df mask with only values for specific PondID
-            mask = output_df['PondID'] == pond_id
-            # get mask index (will be non-sequential) corresponding to the overall df index (i.e., [4, 92, 180, 268, 356])
-            mask_idx = list(output_df.loc[mask].index) 
+        df_harvested = df_harvested[['Date', 'PondID', 'est_harvested_mass', 'est_split_out_mass']]
 
-            # fill missing values for calc_mass_nanno_corrected, to calculate mass changes between days, and get the next available value to calculate with
-            # to ensure that values for days marked as "harvested", "split", or "inactive" in the Split Innoculum column from daily data, are not backfilled
-            # first mark any values that are both missing and on day's marked as "H"/"S"/"I", as 'tmp_for_ffill'
-            # then backfill all missing values 
-            # then replace 'tmp_for_ffill' values with None, and forward fill those
-            output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, :].apply(lambda df_row: 'tmp_for_ffill' if (pd.isna(df_row['calc_mass_nanno_corrected'])) & (df_ref_data[(df_ref_data['PondID'] == df_row['PondID']) & (df_ref_data['Date'] == df_row['Date'])]['Split Innoculum'].iloc[0] is not None) else df_row['calc_mass_nanno_corrected'], axis=1)
-            output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].bfill()
-            output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].replace('tmp_for_ffill', None)
-            output_df.loc[mask, '_tmp_mass'] = output_df.loc[mask, '_tmp_mass'].ffill()
-            
-            def _get_h_s_amount(df_row):
-                df_row = df_row.copy()
-                return_dict = {'H/S': None, 'est_harvested': None, 'est_split': None} # initialize return_dict, values default as None
-                
-                # get the position of the current row within the mask_idx (i.e., if mask_idx = [4, 92, 180, 268, 356] and current row index is 180, then cur_row_mask_idx = 3
-                cur_row_mask_idx = mask_idx.index(df_row.name)
-
-                ref_split_innoc_val_cur = df_ref_data[(df_ref_data['PondID'] == df_row['PondID']) & (df_ref_data['Date'] == df_row['Date'])]['Split Innoculum'].iloc[0]
-                return_dict['H/S'] = ref_split_innoc_val_cur # add the split_innoculum value as a reference in calculation DB
-                
-                # if not on last row of data, and if the current row 'Split Innoculum' value == "S" or "H", then look ahead to the next row for change in mass to get est harvested amount
-                if cur_row_mask_idx+1 != len(mask_idx): 
-                    next_row_vals = output_df.loc[mask_idx[cur_row_mask_idx + 1], :] # returns a single-row pandas df
-                    ref_split_innoc_val_next = df_ref_data[(df_ref_data['PondID'] == df_row['PondID']) & (df_ref_data['Date'] == next_row_vals['Date'])]['Split Innoculum'].iloc[0]
-                    if ref_split_innoc_val_cur in ('H', 'S', 'HC'):
-                        if ref_split_innoc_val_cur in ('H', 'HC'):
-                            update_key = 'est_harvested_backup'
-                        else:
-                            update_key = 'est_split_out_backup'
-                        
-                        if ref_split_innoc_val_cur == 'HC' or ref_split_innoc_val_next == 'I': # if next row is noted "I" for 'inactive', then assume all mass was harvested and return current day mass
-                            return_dict[update_key] = df_row['_tmp_mass'] 
-                        else:
-                            # if the '_tmp_mass' value is na, then assume change in mass cannot be calculated
-                            if pd.isna(df_row['_tmp_mass']):
-                                #print('Error with', df_row['PondID'], df_row['Date'])
-                                pass
-                            else:
-                                next_day_mass_change = df_row['_tmp_mass'] - next_row_vals['_tmp_mass']
-                                if next_day_mass_change > 0:
-                                    return_dict[update_key] = next_day_mass_change
-                return return_dict
-            output_df.loc[mask, ['H/S', 'est_harvested_backup', 'est_split_out_backup']] = output_df.loc[mask, :].apply(lambda x: _get_h_s_amount(x), axis=1, result_type='expand')
+        return df_harvested
         
-        output_df = output_df[['Date', 'PondID', 'est_harvested_backup', 'est_split_out_backup']]
-        return output_df
 
 class CalcDaysSinceHarvestedSplit(DBColumnsBase):
     OUT_TABLE_NAME = 'ponds_data_calculated'
@@ -1299,7 +1350,7 @@ class CalcDaysSinceHarvestedSplit(DBColumnsBase):
                                                      table_name='ponds_data_calculated', 
                                                      query_date_start=start_date-pd.Timedelta(days=45), 
                                                      query_date_end=end_date, 
-                                                     col_names=['active_status', 'est_harvested', 'est_split_out'],
+                                                     col_names=['active_status', 'est_harvested_mass', 'est_split_out_mass'],
                                                      check_safe_date=True)
         
         out_df = ref_df[['Date', 'PondID']]
@@ -1308,7 +1359,7 @@ class CalcDaysSinceHarvestedSplit(DBColumnsBase):
         ref_df = ref_df.set_index('Date')
 
         # get a column of 1's where active_status==True and NOT harvested on day 
-        ref_df['_active_and_not_harvested_split'] = ref_df.apply(lambda row: 1 if row['active_status'] == True and (pd.isna(row['est_harvested']) and pd.isna(row['est_split_out'])) else None, axis=1)
+        ref_df['_active_and_not_harvested_split'] = ref_df.apply(lambda row: 1 if row['active_status'] == True and (pd.isna(row['est_harvested_mass']) and pd.isna(row['est_split_out_mass'])) else None, axis=1)
         
         # get cumulative sum for concurrent days of active_status=True and not harvested/split
         # ref for reset df cumsum() with None row vals: https://stackoverflow.com/questions/55147225/pandas-dataframe-cumsum-reset-on-nan
