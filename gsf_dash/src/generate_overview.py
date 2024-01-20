@@ -12,17 +12,21 @@ warnings.simplefilter(action='ignore', category=UserWarning)
 
 class PondsOverviewPlots:
     def __init__(self, select_date, source_db='gsf_data', run=True, save_output=True): 
-        self.select_date = pd.to_datetime(select_date).normalize() # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
+        # Normalize select_date to remove potential time data and prevent possible key errors when selecting date range from data
+        self.select_date = pd.to_datetime(select_date).normalize() 
         self.save_output = save_output
         self.source_db = source_db
         if run:
-            self.output_filenames = [] # initialize a list to collect output filenames
+            # initialize a list to collect output filenames
+            self.output_filenames = [] 
             [self.output_filenames.append(x) for x in (self.plot_scorecard(), self.plot_potential_harvests(), self.plot_epa())] 
 
     # function to plot outlined legend boxes, using a dict of labels/data, and a separate dict of x_alignments (see examples of dict structure in calls to this function)
     def plot_legend(self, fig, ax, legend_data, x_align, y_spacing, y_align=0.9):
-        y_align = y_align # start upper y-coord for plotting legend
-        max_coords = [1,1,0,0] #  initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
+        # start upper y-coord for plotting legend
+        y_align = y_align 
+        # initialize for tracking the max coordinates of legend items for printing a box around all the legend items (x0, y0, x1, y1)
+        max_coords = [1,1,0,0] 
         data_rows_x_bound = [1,0]
         data_rows_y_bounds = [] 
         for row in legend_data:
@@ -37,7 +41,8 @@ class PondsOverviewPlots:
                 text_color = 'black'
 
                 if 'weight' in properties:
-                    if properties['weight'] == 'underline': # check if 'underline' option since it's not an option in matplotlib and needs to be added after text with an annotation using text bounding box coords
+                    # check if 'underline' option since it's not an option in matplotlib and needs to be added after text with an annotation using text bounding box coords
+                    if properties['weight'] == 'underline': 
                         underline = True
                     elif properties['weight'] == 'bold': 
                         text_weight = 'bold'
@@ -48,8 +53,10 @@ class PondsOverviewPlots:
                 if 'indicator_fill' in properties: # plot indicators instead of normal text
                     # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
                     # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
-                    ax_x0, ax_y0 = ax.transAxes.transform((0, 0)) # lower left in pixels
-                    ax_x1, ax_y1 = ax.transAxes.transform((1, 1)) # upper right in pixes
+                    # lower left in pixels
+                    ax_x0, ax_y0 = ax.transAxes.transform((0, 0)) 
+                    # upper right in pixels
+                    ax_x1, ax_y1 = ax.transAxes.transform((1, 1)) 
                     ax_dx = ax_x1 - ax_x0
                     ax_dy = ax_y1 - ax_y0
                     ax_maxd = max(ax_dx, ax_dy)
@@ -72,7 +79,8 @@ class PondsOverviewPlots:
                 # update the max coord boundaries for the rows that are assigned a color
                 if row_fill_color != 'white':  
                     #print(label, bb)
-                    if 'excl_color' not in properties: # add option of excluding a row item from being colored
+                    # add option of excluding a row item from being colored
+                    if 'excl_color' not in properties: 
                         if bb.x0 < data_rows_x_bound[0]:
                             data_rows_x_bound[0] = bb.x0
                         if bb.x1 > data_rows_x_bound[1]:
@@ -92,7 +100,8 @@ class PondsOverviewPlots:
                 if bb.y1 > max_coords[3]:
                     max_coords[3] = bb.y1
 
-            y_align -= y_spacing # decrease y coord for each line for spacing       
+            # decrease y coord for each line for spacing    
+            y_align -= y_spacing    
 
             if row_fill_color != 'white':
                 data_rows_y_bounds.append((row_y_bound,row_fill_color))
@@ -127,7 +136,8 @@ class PondsOverviewPlots:
         
         # function to plot each pond to ensure that data for each plot is kept within a local scope
         def plot_each_pond(fig, pond_plot, pond_name, select_date):
-            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=-0.01, hspace=-0.01) # each individual plot (from gridspec) is divided into subplots with 5 rows and 3 columns
+            # each individual plot (from gridspec) is divided into subplots with 5 rows and 3 columns
+            inner_plot = gridspec.GridSpecFromSubplotSpec(5,3,subplot_spec=pond_plot, wspace=-0.01, hspace=-0.01) 
 
             # get measurements data from db for pond
             pond_data = measurements_df[measurements_df['PondID'] == pond_name].iloc[0]
@@ -206,20 +216,23 @@ class PondsOverviewPlots:
                 try:
                     # Get transform info to properly plot circles, using Ellipse. Otherwise they are deformed 
                     # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
-                    x0, y0 = title_ax.transAxes.transform((0, 0)) # lower left in pixels
-                    x1, y1 = title_ax.transAxes.transform((1, 1)) # upper right in pixes
+                    # lower left in pixels
+                    x0, y0 = title_ax.transAxes.transform((0, 0)) 
+                    # upper right in pixes
+                    x1, y1 = title_ax.transAxes.transform((1, 1)) 
                     dx = x1 - x0
                     dy = y1 - y0
                     maxd = max(dx, dy)
                     circle_width = .07 * maxd / dx
                     circle_height = .07 * maxd / dy
 
-                    width_indicator_data = len(pond_indicator_data)*(circle_width+.01) # get the width of the indicator data (when plotted in circles)
-                    calc_start_x = .5 - (width_indicator_data/2) + ((circle_width+0.01)/2) # calculate which X coord to start plotting indicators (to center them on each subplot)
+                    # get the width of the indicator data (when plotted in circles)
+                    width_indicator_data = len(pond_indicator_data)*(circle_width+.01) 
+                    # calculate which X coord to start plotting indicators (to center them on each subplot)
+                    calc_start_x = .5 - (width_indicator_data/2) + ((circle_width+0.01)/2) 
                     indicator_plot_y = .18
                     x_space = circle_width + 0.01
-                    #if width_indicator_data > 0: 
-                    #    ax.text(calc_start_x - 0.05,indicator_plot_y, 'Indicators:', ha='right', va='center')
+                    
                     for [indicator_string,color] in pond_indicator_data:
                         title_ax.add_patch(Ellipse((calc_start_x, indicator_plot_y + 0.02), circle_width, circle_height, color=color, fill=color))
                         title_ax.text(calc_start_x, indicator_plot_y, indicator_string, color='white', ha='center', va='center', fontweight='bold', fontsize='x-small', linespacing=0.7)
@@ -235,14 +248,16 @@ class PondsOverviewPlots:
                 pond_data_depth = pond_data['Depth']
                 if pd.isna(pond_data_depth) or pond_data_depth == 0:
                     pond_data_depth = 'No data'
-                else:    
-                    pond_data_depth = f'{"**" if pond_data["non_current_data_flag_depth"] is True else ""}{pond_data_depth}"' # print two asterisks before if data was flagged as 'non-current'
+                else:  
+                    # print two asterisks before if data was flagged as 'non-current'  
+                    pond_data_depth = f'{"**" if pond_data["non_current_data_flag_depth"] is True else ""}{pond_data_depth}"' 
 
                 pond_data_afdw = pond_data['Filter AFDW']
                 if pd.isna(pond_data_afdw) or pond_data_afdw == 0:
                     pond_data_afdw = 'No data'
                 else:
-                    pond_data_afdw = f'{"**" if pond_data["non_current_data_flag_afdw"] is True else ""}{round(pond_data_afdw,3)}' # print two asterisks before if data was flagged as 'non-current'
+                    # print two asterisks before if data was flagged as 'non-current'
+                    pond_data_afdw = f'{"**" if pond_data["non_current_data_flag_afdw"] is True else ""}{round(pond_data_afdw,3)}' 
 
                 pond_data_harvestable_mass = pond_data['harvestable_mass_nanno_corrected']
                 if pd.isna(pond_data_harvestable_mass) or pond_data_harvestable_mass == 0:
@@ -281,14 +296,16 @@ class PondsOverviewPlots:
                 
                 if pond_active: 
                     subplot_dict_key = list(data_plot_dict.keys())[idx] 
-                    text_y = 0.83 # starting y-coordinate for text on subplot, updated after each text plot to decrease y-coord
+                    # starting y-coordinate for text on subplot, updated after each text plot to decrease y-coord
+                    text_y = 0.83 
                     sub_heading = ax.text(0.5, text_y, subplot_dict_key, ha='center', va='center') # subplot heading text
                     # get sub_heading coord bounding box and use to draw a line with annotate arrowprops / using this workaround for underlining text
                     bb = sub_heading.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())  
                     ax.annotate('', xy=(bb.x0-0.02,bb.y0), xytext=(bb.x1+0.025,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
                     text_y -= 0.19
                     for idx2, (key, val) in enumerate(data_plot_dict[subplot_dict_key].items()):
-                        ax.text(0.5, text_y, key, ha='center', va='center') # subplot item heading
+                        # subplot item heading
+                        ax.text(0.5, text_y, key, ha='center', va='center') 
                         text_y -= 0.14
                         ax.text(0.5, text_y, val, ha='center', va='center', weight='bold')
                         text_y -= .2
@@ -296,11 +313,10 @@ class PondsOverviewPlots:
                     
                 else: # if pond is inactive or data_error
                     if idx == 1: # plot in the middle of the lower 3 subplots
-                        # if pond_data_error == True:
-                        #     t = ax.text(0.5, 0.9, 'Data Error', ha='center', va='top')
-                        # else:
                         ax.text(0.5, 0.9, 'Inactive', ha='center', va='top')
                     ax.set_facecolor('snow')
+                
+                # apply standard formatting to the subplot ax (remove borders, etc.)
                 subplot_ax_format(ax)
             
         ##############################
@@ -412,7 +428,8 @@ class PondsOverviewPlots:
                         row.append(f'0{idx_row+1}0{col}')
                     else:
                         row.append(f'{idx_row+1}0{col}')
-            else: # append blanks for the two large columns with only 10 rows 
+            else:
+                # append blanks for the two large columns with only 10 rows 
                 [row.append(f'BLANK {idx_row+1}-{c}') for c in [6,8]]
                  
         # Add 2 blank rows at end to make room for extra data aggregations to be listed        
@@ -441,10 +458,12 @@ class PondsOverviewPlots:
                 # plot each pond with a function to ensure that data for each is isolated within a local scope
                 plot_each_pond(fig, pond_plot, pond_name, select_date)
 
-            else: # for plotting subplots labeled 'BLANK' in 'title_labels' list:  (the four lower right subplots) and the BLANK rows
+            else: 
+                # for plotting subplots labeled 'BLANK' in 'title_labels' list:  (the four lower right subplots) and the BLANK rows
                 ax = plt.Subplot(fig, pond_plot)
                 ax.axis('off')
-                if 'BLANK 11-6' in pond_name: # plot the color key in the first blank subplot in row 11
+                # plot the color key in the first blank subplot in row 11
+                if 'BLANK 11-6' in pond_name: 
                     status_code_mass_df = measurements_df[['Date', 'PondID', 'status_code', 'calc_mass_nanno_corrected']].copy()
                  
                     total_mass_by_code = status_code_mass_df.groupby(by='status_code').agg(pond_count=('status_code', 'count'), calc_mass_nanno_corrected=('calc_mass_nanno_corrected', 'sum')).reset_index()
@@ -620,7 +639,8 @@ class PondsOverviewPlots:
                                                 'str_label': 'gal'
                                                 },
                                           'SF Volume:': 
-                                              {'column_name': ['Calculated SF Permeate Volume (gal)', 'SF Reported Permeate Volume (gal)'],  # 1st is primary source, 2nd is secondary source if no data for primary
+                                            # 1st column_name is primary source, 2nd is secondary source if no data for primary
+                                              {'column_name': ['Calculated SF Permeate Volume (gal)', 'SF Reported Permeate Volume (gal)'],  
                                                'data_format': int,
                                                'str_label': 'gal'
                                                 },
@@ -651,20 +671,22 @@ class PondsOverviewPlots:
                     bb = proc_t.get_window_extent(renderer=fig.canvas.get_renderer()).transformed(ax.transAxes.inverted())
                     ax.annotate('', xy=(bb.x0-0.01,bb.y0), xytext=(bb.x1+0.01,bb.y0), xycoords="axes fraction", arrowprops=dict(arrowstyle="-", color='k'))
 
-                    #prev_date_data = self.processing_dataframe.loc[prev_date]
                     prev_date_processing_data = query_data_table_by_date_range(db_name_or_engine=self.source_db, 
                                                          table_name='daily_processing_data', 
                                                          query_date_start=self.select_date-pd.Timedelta(days=1), 
                                                          query_date_end=self.select_date-pd.Timedelta(days=1)).iloc[0] 
 
                     for label, subdict in processing_columns.items():
-                        if isinstance(subdict['column_name'], list): # when 'column_name' is a list, get the first item with data (so first item in list is primary source)
+                        # when 'column_name' is a list, get the first item with data (so first item in list is primary source)
+                        if isinstance(subdict['column_name'], list): 
                             for data_col_name in subdict['column_name']:
-                                try: # force the data item to the 'data_format' type, with try/except to catch errors
+                                # force the data item to the 'data_format' type, with try/except to catch errors
+                                try: 
                                     data_i = prev_date_processing_data[data_col_name]
                                     if (subdict['data_format'] == str and (data_i != '' or data_i != 'nan')) or (subdict['data_format'] != str and not pd.isna(data_i) and data_i > 0):
                                         prev_day_val = data_i
-                                        break # if valid data is found, then break and stop evaluating any more columns
+                                        # if valid data is found, then break and stop evaluating any more columns
+                                        break 
                                     else:
                                         prev_day_val = None
                                 except: 
@@ -694,7 +716,8 @@ class PondsOverviewPlots:
                             
                     proc_t.update({'text': processing_data_str})
                 
-                fig.add_subplot(ax) # add the subplot for the 'BLANK' entries
+                # add the subplot for the 'BLANK' entries
+                fig.add_subplot(ax) 
 
         if self.save_output:
             out_filename = f'./output_files/{plot_title} {select_date.strftime("%Y-%m-%d")}.pdf'
@@ -709,12 +732,14 @@ class PondsOverviewPlots:
             plt_height = 11
             scale_factor = 1
             fig, ax = plt.subplots(figsize=(plt_width*scale_factor, plt_height*scale_factor))
-            ax_border_pad = 0.5 # margin padding (in inches) between ax and full fig on all sides, just to maintain a margin for printing without needing to rescale, as well as room for header/footer info to be added (page numbers, etc.)
+            # margin padding (in inches) between ax and full fig on all sides, just to maintain a margin for printing without needing to rescale, as well as room for header/footer info to be added (page numbers, etc.)
+            ax_border_pad = 0.5 
             ax_width = (plt_width - ax_border_pad*2) / plt_width
             ax_height = (plt_height - ax_border_pad*2) / plt_height 
             ax_left_x = (1 - ax_width)/2
             ax_bottom_y = (1 - ax_height)/2
-            ax.set_position([ax_left_x, ax_bottom_y, ax_width, ax_height]) # set ax to fill entire figure (except for the border padding)
+            # set ax to fill entire figure (except for the border padding)
+            ax.set_position([ax_left_x, ax_bottom_y, ax_width, ax_height]) 
             ax.axis('off')
             #ax.yaxis.get_ticklocs(minor=True)
             #ax.minorticks_on()
@@ -761,7 +786,8 @@ class PondsOverviewPlots:
                 table.remove()
                 return 'start_new_page'     
             else:
-                return table_dims.y0 # return the minimum/bottom y_coordinate value for the table
+                # return the minimum/bottom y_coordinate value for the table
+                return table_dims.y0 
 
         select_date = self.select_date
 
@@ -832,15 +858,17 @@ class PondsOverviewPlots:
         potential_harvests_df['Running Total Gallons'] = potential_harvests_df["Running Total Gallons"].apply(lambda x: f'{x:,.0f} gal')
         potential_harvests_df['Running Total Mass'] = potential_harvests_df["Running Total Mass"].apply(lambda x: f'{x:,.0f} kg')
         
-        fig_list = [] # initialize list of figs (one for each output page, as necessary)
-        tables_list = list(potential_harvests_df['Column'].unique()) # init list of tables to generate (one for each Column (1,2,3,4,6,8) with valid data (at least one pond with harvestable mass)
-
+        # initialize list of figs (one for each output page, as necessary)
+        fig_list = []
+        # init list of tables to generate (one for each Column (1,2,3,4,6,8) with valid data (at least one pond with harvestable mass)
+        tables_list = list(potential_harvests_df['Column'].unique()) 
         fig, ax, y_align = gen_fig(title=True)
 
         table_spacing = 0.035
 
         while tables_list:
-            column_id = tables_list.pop(0) # set 'table_title' equal to the key column identifier ('1', '2', '3', '4', '6', or '8')
+            # set 'table_title' equal to the key column identifier ('1', '2', '3', '4', '6', or '8')
+            column_id = tables_list.pop(0) x
             # get dataframe for table (data for each Column id)
             df = potential_harvests_df[potential_harvests_df['Column'] == column_id].drop('Column', axis=1)
 
@@ -871,12 +899,13 @@ class PondsOverviewPlots:
                                                     check_safe_date=True)
             epa_dict = {}
             for pond_id in epa_df['PondID'].unique():
-                pond_df = epa_df[(epa_df['PondID'] == pond_id)].copy() # & (~pd.isna(epa_df['epa_actual_measurement']))
+                pond_df = epa_df[(epa_df['PondID'] == pond_id)].copy()
                 pond_epa_dict = {}
                 # iterate through rows (from newest to oldest), and if any Null values are detected, stop iterating
                 # because when epa_val == None, indicates that pond was inactive
                 for row in pond_df[::-1].iterrows():
-                    if len(pond_epa_dict) >= 3: # limit to displaying only last 3 values for epa measurements
+                    # limit to displaying only last 3 values for epa measurements
+                    if len(pond_epa_dict) >= 3: 
                         break
                     row_data = row[1]
                     if pd.isna(row_data['epa_val']):
@@ -1053,7 +1082,8 @@ class PondsOverviewPlots:
                         row.append(f'0{idx_row+1}0{col}')
                     else:
                         row.append(f'{idx_row+1}0{col}')
-            else: # append blanks for the two large columns with only 10 rows 
+            else: 
+                # append blanks for the two large columns with only 10 rows 
                 [row.append(f'BLANK {idx_row+1}-{c}') for c in [6,8]]
 
         # flatten title_labels for indexing from plot gridspec plot generation
@@ -1083,7 +1113,8 @@ class PondsOverviewPlots:
                 if 'BLANK 11-6' in pond_name: # plot the color key in the first blank subplot
                     legend_data = [{'labels':{'Color key (latest measurement)': {'align': '1', 'weight': 'bold'}}},
                                    {'labels':{'EPA %': {'align': '1', 'weight': 'underline'}}},
-                                   {'labels':{'0% - 1.99%'.center(50): {'align': '1'}}, 'fill_color': 'red'}, # use .center() to pad spacing for one row to make legend plot wider
+                                   # use .center() to pad spacing for one row to make legend plot wider
+                                   {'labels':{'0% - 1.99%'.center(50): {'align': '1'}}, 'fill_color': 'red'}, 
                                    {'labels':{'2% - 2.99%': {'align': '1'}}, 'fill_color': 'yellow'},
                                    {'labels':{'3% and up': {'align': '1'}}, 'fill_color': 'mediumspringgreen'},
                                    {'labels':{'No EPA data': {'align': '1'}}, 'fill_color': 'lightgrey'}
@@ -1353,4 +1384,3 @@ class PondsOverviewPlots:
     #         out_filename = f'./output_files/{plot_title} {self.select_date.strftime("%Y-%m-%d")}.pdf'
     #         plt.savefig(out_filename, bbox_inches='tight')     
     #         return out_filename
-
