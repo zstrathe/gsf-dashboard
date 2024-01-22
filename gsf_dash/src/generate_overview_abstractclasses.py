@@ -437,8 +437,8 @@ class ExpenseGridReport(BasePondsGridReport):
             table_name="ponds_data_calculated",
             query_date_start=self.ytd_start,
             query_date_end=self.report_date,
-            col_names=["est_harvested"],
-        )  # removed: 'est_split_out' - add back in once 'est_split_in' available
+            col_names=["est_harvested_mass"],
+        )  # removed: 'est_split_out_mass' - add back in once 'est_split_in' available
 
         # get mtd expense & harvested data by filtering ytd_expense data
         self.mtd_expense_data = self.ytd_expense_data[
@@ -681,13 +681,8 @@ class ExpenseGridReport(BasePondsGridReport):
             fontsize=self.fontsizes["small"],
         )
 
-        # show ytd mass breakout by harvest and splits
-        # ytd_harvest_harvested = self.ytd_harvest_data.loc[:,'est_harvested'].sum()
-        # ytd_harvest_split = self.ytd_harvest_data.loc[:, 'est_split'].sum()
-        # self.fig.text(0.07, 0.14, 'YTD Mass to Processing\nYTD Mass to Splits', ha='left', va='top', ma='left', weight='bold', fontsize=self.fontsizes['medium'])
-        # self.fig.text(0.26, 0.14, f'{int(ytd_harvest_harvested):,} kg\n{int(ytd_harvest_split):,} kg', ha='left', va='top', ma='right', fontsize=self.fontsizes['medium'])
-
-        # plot some temp info about expense calcs
+        # plot basic info for expense unit costs
+        # TODO: make into a better formmated table
         self.fig.text(
             0.7,
             0.3,

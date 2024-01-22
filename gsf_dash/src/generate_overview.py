@@ -218,7 +218,7 @@ class PondsOverviewPlots:
                     # ref: https://stackoverflow.com/questions/9230389/why-is-matplotlib-plotting-my-circles-as-ovals
                     # lower left in pixels
                     x0, y0 = title_ax.transAxes.transform((0, 0)) 
-                    # upper right in pixes
+                    # upper right in pixels
                     x1, y1 = title_ax.transAxes.transform((1, 1)) 
                     dx = x1 - x0
                     dy = y1 - y0
@@ -868,7 +868,7 @@ class PondsOverviewPlots:
 
         while tables_list:
             # set 'table_title' equal to the key column identifier ('1', '2', '3', '4', '6', or '8')
-            column_id = tables_list.pop(0) x
+            column_id = tables_list.pop(0)
             # get dataframe for table (data for each Column id)
             df = potential_harvests_df[potential_harvests_df['Column'] == column_id].drop('Column', axis=1)
 
