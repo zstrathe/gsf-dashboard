@@ -1,7 +1,9 @@
 import pandas as pd
+from urllib.error import HTTPError
 import json
 import os
 import re
+import time
 import functools
 from pathlib import Path
 from typing import Type
@@ -9,7 +11,6 @@ from datetime import datetime
 from O365 import Account, FileSystemTokenBackend
 from O365.excel import WorkBook, WorkSheet
 from utils.utils import load_setting
-
 
 class MSAccount(object):
     connection_settings = load_setting("m365_cred")
@@ -68,8 +69,7 @@ class MSAccount(object):
         def create_jwt_assertion(private_key, tenant_id, thumbprint, client_id):
             """
             From https://github.com/O365/python-o365/blob/master/examples/jwt_assertion.py
-            """
-            """
+
             Create a JWT assertion, used to obtain an auth token.
             @param private_key: Private key in PEM format from the certificate that was registered as credentials for the
              application.
@@ -133,7 +133,7 @@ class MSAccount(object):
     def interactive_view_sharepoint_data(self):
         """
         Method for using interactively to view items in sharepoint folders
-        Use to find object_id's of specific items to utilize with get_sharepoint_file_by_id()
+        Use to find object_id's of specific items to utilize with get_sharepoint_item_by_id()
 
         To find sharepoint site id, go to https://<tenant>.sharepoint.com/sites/<site name>/_api/site/id
         """
@@ -174,19 +174,74 @@ class MSAccount(object):
             except:
                 print("Error loading specified folder. Try again.")
 
-    def get_sharepoint_file_by_id(self, object_id):
+    def get_sharepoint_item_by_id(self, object_id: str):
         """
-        Get a sharepoint file by looking for its object_id within each site listed in settings config file
+        Get a sharepoint item by looking for its object_id within each site listed in settings config file
         (this way it's not necessary to specify which site a file is located on, just need its object_id)
+
+        To handle bugs with intermittent HTTP 400 connection errors: use a counter for multiple attempts before failure
         """
-        for lib in self.site_libs.values():
+        class SharepointItemFailureException(Exception):
+            pass
+
+        attempt_counter = 1
+        while attempt_counter <= 5:
+            # use an outer try/except block
             try:
-                return lib.get_item(object_id)
-            except:
-                pass
+                print('testetset libs:', self.site_libs.values())
+                for idx, lib in enumerate(self.site_libs.values()):
+                    print('testetsetset checking lib:', lib)
+                    # use another inner try/except/finally block, because this is expected to fail on some attempts, since it's
+                    # blindly checking each site lib for the file
+                    # Raise an exception in the "finally" block
+                    try:
+                        return lib.get_item(object_id)
+                    except:
+                        pass
+                    
+                    if idx+1 == len(self.site_libs.values()):
+                        raise SharepointItemFailureException('Could not get sharepoint item')
+                    
+            except SharepointItemFailureException:
+                print(f'Sharepoint file retrieval failed...{"waiting 5 seconds and trying again." if attempt_counter < 5 else ""}')
+                if attempt_counter < 5:
+                    time.sleep(5)
+                attempt_counter += 1
+
         # send error message and return None if file wasn't found in any of the site_libs
         print(
             error_msg := f"ERROR: failed to get sharepoint object with ID: {object_id}"
+        )
+        self.send_email(
+            recipients=self.failure_email_info["recipients"],
+            subject="FAILURE: loading sharepoint file",
+            msg_body=error_msg,
+        )
+        return None
+    
+    def get_sharepoint_folder_by_id(self, folder_id: str):
+        """
+        Get a sharepoint folder by looking for its object_id within each site listed in settings config file
+        (this way it's not necessary to specify which site a file is located on, just need its object_id)
+        
+        To handle bugs with intermittent HTTP 400 connection errors: add try/except clause and attempts counter to get items
+        """
+        folder_item = self.get_sharepoint_item_by_id(object_id=folder_id)
+        if folder_item is None:
+            raise ValueError('ERROR: could not retrieve folder object from sharepoint!')
+        attempt_counter = 1
+        while attempt_counter <= 5:
+            try:
+                return folder_item.get_items()
+            except HTTPError:
+                print(f'Sharepoint folder retrieval failed...{"waiting 5 seconds and trying again." if attempt_counter < 5 else ""}')
+                if attempt_counter < 5:
+                    time.sleep(5)
+                attempt_counter += 1
+
+        # send error message and return None if file wasn't found in any of the site_libs
+        print(
+            error_msg := f"ERROR: failed to get sharepoint folder with ID: {folder_id}"
         )
         self.send_email(
             recipients=self.failure_email_info["recipients"],
@@ -198,7 +253,7 @@ class MSAccount(object):
     def download_sharepoint_file_by_id(
         self, object_id: str, to_path: Path, **kwargs
     ) -> Path | None:
-        file_obj = self.get_sharepoint_file_by_id(object_id)
+        file_obj = self.get_sharepoint_item_by_id(object_id)
         dl_success = file_obj.download(
             to_path=to_path, **kwargs
         )  # returns True if success, False if failure
@@ -246,7 +301,7 @@ class M365ExcelFileHandler:
         """
         - Extracts data from excel workbooks with M365 API and loads into pandas dataframes
         - Dataframes are stored in self.data, with keys set as sheet names
-        - Errors will send a notification email (for loading sheets from workbook ... if there is an error on fetching the file, then get_sharepoint_file_by_id() will send notification instead)
+        - Errors will send a notification email (for loading sheets from workbook ... if there is an error on fetching the file, then get_sharepoint_item_by_id() will send notification instead)
 
         params:
             - file_object_id:
@@ -271,7 +326,7 @@ class M365ExcelFileHandler:
         # get account connection
         self._account = MSAccount()
         self._file_id = file_object_id
-        self._file_obj = self._account.get_sharepoint_file_by_id(file_object_id)
+        self._file_obj = self._account.get_sharepoint_item_by_id(file_object_id)
         # will be None if error fetching file
         if self._file_obj is None:
             raise Exception(f"Could not load workbook for object_id: {file_object_id}")
