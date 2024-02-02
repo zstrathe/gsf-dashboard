@@ -18,7 +18,8 @@ def check_if_table_exists(db_engine: sqlalchemy.Engine, table_name: str) -> bool
     # return boolean value depending on table_name existence in db
     return sqlalchemy.inspect(db_engine).has_table(table_name)
 
-def get_available_date_range(db_engine: sqlalchemy.Engine, check_table_name: str = 'ponds_data_aggregate'):
+
+def get_available_date_range(db_engine: sqlalchemy.Engine, check_table_name: str = 'available_dates'):
     '''Get the available range of dates in the DB
     params:
     - db_engine: database SQLAlchemy engine
@@ -40,13 +41,13 @@ def get_available_date_range(db_engine: sqlalchemy.Engine, check_table_name: str
 
 def init_db_table(db_engine: sqlalchemy.Engine, table_name: str) -> None:
     """Helper function to initialize a database table
-    -Looks for {table_name}.create_table file in ./setting/db_schemas directory which contains a CREATE TABLE IF NOT EXISTS statement for sqlite
+    -Looks for {table_name}.create_table file in ./db/db_schemas directory which contains a CREATE TABLE IF NOT EXISTS statement for sqlite
     """
-    table_schemas_path = Path("./settings/db_schemas")
+    table_schemas_path = Path("./db/db_schemas")
     table_schemas_dir = os.listdir(table_schemas_path)
     if f"{table_name}.create_table" not in table_schemas_dir:
         print(
-            f"ERROR: table schema for {table_name} not found! Add sqlite table create statement to .settings/db_schemas/ folder as .create_table file"
+            f"ERROR: table schema for {table_name} not found! Add sqlite table create statement to .db/db_schemas/ folder as .create_table file"
         )
         return
 
