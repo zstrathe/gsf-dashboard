@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 
-# load auth credentials & settings from settings.cfg file
+# load settings from settings.cfg file
 def load_setting(specified_setting):
     cp = ConfigParser()
     cp.read("./settings/settings.cfg")

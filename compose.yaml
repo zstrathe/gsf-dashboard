@@ -1,0 +1,24 @@
+# Comments are provided throughout this file to help you get started.
+# If you need more help, visit the Docker compose reference guide at
+# https://docs.docker.com/go/compose-spec-reference/
+services:
+  dashapp:
+    build:
+      context: .
+    ports:
+      - 8050:8050
+    command: python3 src/dash_app/dash_app.py
+
+  dataloader:
+    build:
+      context: .
+    volumes:
+      # bind volume to 
+      - ../gsf_dash_settings_private:/usr/src/gsf_dash_settings_private
+    command: python3 src/dataloader -t True -d 2024-02-01
+
+
+
+
+
+

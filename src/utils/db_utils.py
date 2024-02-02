@@ -18,6 +18,25 @@ def check_if_table_exists(db_engine: sqlalchemy.Engine, table_name: str) -> bool
     # return boolean value depending on table_name existence in db
     return sqlalchemy.inspect(db_engine).has_table(table_name)
 
+def get_available_date_range(db_engine: sqlalchemy.Engine, check_table_name: str = 'ponds_data_aggregate'):
+    '''Get the available range of dates in the DB
+    params:
+    - db_engine: database SQLAlchemy engine
+    - check_table_name: string of table name to check date range for 
+        - defaults to 'ponds_data' table, any would probably work though since they should all update daily
+        - potential future option: check all tables and combine results'''
+    # query the db_table
+    # use a ridiculous date range and set check_safe_date to True so that only 
+    dates_df = query_data_table_by_date_range(db_name_or_engine=db_engine,
+                                   table_name=check_table_name,
+                                   query_date_start=datetime(1888,1,1),
+                                   query_date_end=datetime(4000,1,1),
+                                   col_names=[],
+                                   check_safe_date=True)
+
+    # return Date column as a list
+    return dates_df['Date'].to_list()
+    
 
 def init_db_table(db_engine: sqlalchemy.Engine, table_name: str) -> None:
     """Helper function to initialize a database table
@@ -262,8 +281,12 @@ def query_data_table_by_date_range(
     query_date_end: datetime
     col_names: list of column names (strings) to return or None
         - if None -> returns all columns
+        - 'Date' and 'PondID' fields are returned always, so these columns do not need to be specified
+            - 'PondID' is not returned if it doesn't exist in table
     raise_exception_on_error: bool :  if query fails, default (True) is to raise Exception; however if set to False this parameter will allow None to be returned instead
-    check_safe_date: bool: if True, check for the first available date in the db table and override the query_date_start param if necessary; otherwise if False (default) do not override (and will fail if date param falls outside of available range in db)
+    check_safe_date: bool: if True, check for the first available date in the db table and override the query_date_start param if necessary; otherwise if False (default), 
+                           then do not override (and will fail if date param falls outside of available range in db). This parameter requires checking the entire table, so
+                           would be slow for very large tables. So it is set to False by default.
 
     Returns
     --------
@@ -303,6 +326,7 @@ def query_data_table_by_date_range(
 
         with db_engine.begin() as conn:
             # when check_safe_date = True, get date from first row of db table, and if query_date_start is earlier than that date, then set query_date_start to the first row date
+            # set to False by default because it needs to check the entire table, thus is slow
             if check_safe_date:
                 # first_avail_date = conn.execute(sqlalchemy.text("SELECT Date FROM :table_name LIMIT 1;"), {'table_name': table_name}).fetchall()
                 first_avail_date = conn.execute(
@@ -353,7 +377,7 @@ def query_data_table_by_date_range(
         return out_df
 
 
-def convert_df_date_cols(df, option: str, dt_format: str = "%Y-%m-%d") -> pd.DataFrame:
+def convert_df_date_cols(df, option: str, dt_format: str = "%Y-%m-%d") -> pd.DataFrame:#
     """
     Helper function to convert the Date column in a pandas dataframe
 

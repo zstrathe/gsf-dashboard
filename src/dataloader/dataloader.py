@@ -11,15 +11,21 @@ import pandas as pd
 import numpy as np
 import sqlalchemy
 
-from .ms_account_connect import MSAccount, M365ExcelFileHandler
-from .db_utils import (
+# add .packages/ directory to sys.path, so that other relative modules can be imported
+import os
+import sys
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.dirname(SCRIPT_DIR)) 
+
+from o365_connect import MSAccount, M365ExcelFileHandler
+from utils.db_utils import (
     init_db_table,
     query_data_table_by_date_range,
     check_if_table_exists,
     get_db_table_columns,
     update_table_rows_from_df,
 )
-from .utils import load_setting, redirect_logging_to_file
+from utils.utils import load_setting, redirect_logging_to_file
 
 
 class Dataloader:
@@ -413,6 +419,9 @@ class DailyDataLoad(DBColumnsBase):
                     "AFDW (Filter)": "Filter AFDW",
                 }
             )
+
+            print('DOCKER TEST:\n', df)
+
             ### Skip sheet if there isn't a "PondID" column present
             # - Do this after cleaning column names due to renaming "Pond" and "Pond ID" columns to "PondID"
             # - might have issues if any sheets don't have the headers starting on the first row
@@ -775,7 +784,7 @@ class EPALoad(DBColumnsBase):
         super().__init__(*args, **kwargs)
 
     def run(self):
-        ## TODO: use data available from M365 api to check if file has been updated, then just store local file and re-download when necessary
+        ## TODO: use data available from M365 api to check if file has been updated, then just store local file and re-download when necessary?
         if not hasattr(self, "_epa_df"):
             EPALoad._epa_df = self._download_and_merge_epa_data()
         epa_df = self._epa_df.copy()
@@ -1599,8 +1608,6 @@ class CalcMassGrowthPerPond(DBColumnsBase):
         # filter output to include rows only greater than the parameter start_date (since it is overridden to a min of 14 days for calculations to work)
         calc_df = calc_df[calc_df["Date"] >= _param_start_date]
 
-        calc_df.to_excel("test_growth_per_pond_rev3.xlsx", index=False)
-
         # filter to output columns
         calc_df = calc_df[
             [
@@ -1700,8 +1707,6 @@ class CalcMassGrowthAggregate(DBColumnsBase):
         # reset index so that Date is a column
         agg_growth_df = agg_growth_df.reset_index()
 
-        agg_growth_df.to_excel("test_agg_growth.xlsx", index=False)
-
         # filter output to include rows only greater than the parameter start_date (since it is overridden to a min of 7 days for calculations to work)
         agg_growth_df = agg_growth_df[agg_growth_df["Date"] >= _param_start_date]
 
@@ -1740,6 +1745,7 @@ class CalcHarvestedSplitMass(DBColumnsBase):
         backup_estimates_df = self._calc_harvested_split_from_volume_logs(
             start_date=self.run_date_start, end_date=self.run_date_end
         )
+
         backup_estimates_df = backup_estimates_df.rename(
             columns={
                 "est_harvested_mass": "est_harvested_mass_backup",
@@ -1752,6 +1758,7 @@ class CalcHarvestedSplitMass(DBColumnsBase):
 
         # if there is no value (for est_harvested and est_split_out) for the current day, previous day, and next day,
         # then use the backup value (will be None unless a backup value exists)
+        # (NOTE: 'Harvested-Split' will be None if there is a value for the previous or next day, and the backup val wont be used)
         hs_df["est_harvested_mass"] = hs_df.apply(
             lambda row: row["est_harvested_mass_backup"]
             if (pd.isna(row["est_harvested_mass"]) & (~pd.isna(row["Harvested-Split"])))
@@ -1814,31 +1821,40 @@ class CalcHarvestedSplitMass(DBColumnsBase):
 
         # conditions
         conditions = [
+            #1: NONE: first check default condition (not harvested nor split)
+            # when harvested/split vol is not noted for day, and either nothing in Split Innoculum column or an 'I' (indicating inactive)
             (pd.isna(df["harvest_volume"]))
             & (pd.isna(df["split_volume_out"]))
             & (
                 (pd.isna(df["Split Innoculum"]))
                 | (df["Split Innoculum"].str.upper() == "I")
             ),
-            # check conditions on 'Split Innoculum' column first since it should be noted whether harvested or harvested completely
+            # check conditions on 'Split Innoculum' column since it should be noted whether harvested or harvested completely
+            #2: HC:  Primary "harvested completely" condition
             (df["Split Innoculum"].str.upper() == "HC")
             | (
                 (df["Split Innoculum Next"].str.upper() == "I")
                 & (df["Split Innoculum"].str.upper() == "H")
-            ),  # harvested completely condition
+            ),  
+            #3: HC: backup harvested completely condition, when nothing noted but inactive the next day (could also be a split, but attributing to harvest is safer)
             (df["Split Innoculum Next"].str.upper() == "I")
             & (
                 (pd.isna(df["Split Innoculum"]))
-            ),  # backup harvested completely condition, when nothing noted but inactive the next day (could also be a split, but attributing to harvest is safer)
-            df["Split Innoculum"].str.upper() == "H",  # harvested condition
+            ),  
+            #4: H: primary harvested condition
+            df["Split Innoculum"].str.upper() == "H", 
+            #5: SC: split completely condition
             (df["Split Innoculum"].str.upper() == "SC")
             | (
                 (df["Split Innoculum Next"].str.upper() == "I")
                 & (df["Split Innoculum"].str.upper() == "S")
-            ),  # split completely condition
-            df["Split Innoculum"].str.upper() == "S",  # split condition
-            df["harvest_volume"] > 0,  # backup 'harvest' condition
-            df["split_volume_out"] > 0,  # backup 'split' condition
+            ),  
+            #6: S: primary split condition
+            df["Split Innoculum"].str.upper() == "S", 
+            #7: H: backup harvest condition
+            df["harvest_volume"] > 0, 
+            #8: S: backup split condition
+            df["split_volume_out"] > 0, 
         ]
         choices = [None, "HC", "HC", "H", "SC", "S", "H", "S"]
         df["Harvested-Split"] = np.select(conditions, choices, default="ERROR")

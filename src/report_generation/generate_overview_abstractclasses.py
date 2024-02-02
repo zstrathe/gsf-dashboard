@@ -8,10 +8,12 @@ import warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.simplefilter(action="ignore", category=UserWarning)
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse, Rectangle
-from .utils import generate_multipage_pdf
-from .db_utils import query_data_table_by_date, query_data_table_by_date_range
+
+from utils.utils import generate_multipage_pdf
+from utils.db_utils import query_data_table_by_date, query_data_table_by_date_range
 
 
 class BaseReportProperties:
@@ -73,7 +75,7 @@ class BasePondsGridReport(ABC, BaseReportProperties):
         self.report_date = report_date
         self.save_output = save_output
 
-    # returns output file path if self.save_output == True, else returns None
+    # returns output file path if self.save_output == True, else returns figure
     def run(self) -> str | None:
         """
         Method to generate the report
@@ -114,7 +116,7 @@ class BasePondsGridReport(ABC, BaseReportProperties):
         plt_width = 8.27  # 8.27
         plt_height = 11.69  # 11.69
         scale_factor = 2
-        self.fig = plt.figure(
+        self.fig = plt.figure( 
             figsize=(plt_width * scale_factor, plt_height * scale_factor)
         )
 
@@ -148,7 +150,7 @@ class BasePondsGridReport(ABC, BaseReportProperties):
         # self.fig.text(0.125, 0.01, 'test figure text', ha='left', va='top')
         self.plot_annotations()
 
-        # self.fig.show()
+       # self.fig.show()
         if self.save_output:
             out_path = Path(
                 f"output_files/{self.report_title} {self.report_date.as_str_filename}.pdf"
@@ -157,7 +159,7 @@ class BasePondsGridReport(ABC, BaseReportProperties):
             self.fig.savefig(out_path.as_posix())
             return out_path.as_posix()
         else:
-            return None
+            return self.fig
 
     def subplot_ax_format(self, subplot_ax, fill_color: str | None = None):
         """
@@ -365,6 +367,7 @@ class BasePondsGridReport(ABC, BaseReportProperties):
 
 
 class TestReport(BasePondsGridReport):
+    ''' Test report to verify BasePondsGridReport settings'''
     def load_data(self):
         pass
 
@@ -377,7 +380,8 @@ class TestReport(BasePondsGridReport):
                 n_rows, n_cols, subplot_spec=subplot_spec, wspace=-0.01, hspace=-0.01
             )
 
-            title_ax = plt.Subplot(self.fig, subplot_grid[:2, :])
+           # title_ax = self.fig.subplots(self.fig, subplot_grid[:2, :]) # replace plt.Subplot with self.fig.Subplot
+            title_ax = self.fig.add_subplot(subplot_grid[:2, :]) # replace plt.Subplot with self.fig.Subplot
             self.subplot_ax_format(title_ax, fill_color="lightgrey")
             # override the default fontsize
             title_ax.text(
@@ -398,7 +402,8 @@ class TestReport(BasePondsGridReport):
                 fontsize=self.fontsizes["medium"],
             )
 
-            data_ax = plt.Subplot(self.fig, subplot_grid[2:, :])
+            #data_ax = self.fig.subplots(self.fig, subplot_grid[2:, :]) # replace plt.Subplot with self.fig.Subplot
+            data_ax = self.fig.add_subplot(subplot_grid[2:, :]) # replace plt.Subplot with self.fig.Subplot
             self.subplot_ax_format(data_ax, fill_color=None)
             data_ax.text(0.5, 0.5, "test data text", ha="center", va="center")
 

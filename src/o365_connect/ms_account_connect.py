@@ -8,7 +8,7 @@ from typing import Type
 from datetime import datetime
 from O365 import Account, FileSystemTokenBackend
 from O365.excel import WorkBook, WorkSheet
-from .utils import load_setting
+from utils.utils import load_setting
 
 
 class MSAccount(object):

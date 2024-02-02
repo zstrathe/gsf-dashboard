@@ -1,4 +1,4 @@
-from .db_utils import query_data_table_by_date, query_data_table_by_date_range
+from utils.db_utils import query_data_table_by_date, query_data_table_by_date_range
 import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path

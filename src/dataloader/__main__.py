@@ -2,12 +2,17 @@ import sys
 import argparse
 import traceback
 from datetime import datetime
-from src import (
-    Dataloader,
-    PondsOverviewPlots,
-    load_setting,
-    EmailHandler,
-)  # , send_email
+
+# add .packages/ directory to sys.path, so that other relative modules can be imported
+import os
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.dirname(SCRIPT_DIR)) 
+
+from dataloader import Dataloader
+from utils.utils import load_setting
+from o365_connect import EmailHandler
+from report_generation import PondsOverviewPlots, ExpenseGridReport
+
 import functools
 
 # set print function to always flush buffer for running in terminal (i.e., running from a bash script) for ease of realtime monitoring
@@ -40,6 +45,7 @@ def main(argv):
         default=False,
         help="OPTIONAL: set to True to run as a test to send to alternate email",
     )
+    
     args = parser.parse_args()
 
     if args.test_run:
@@ -60,7 +66,7 @@ def main(argv):
     # EXTRACT, TRANSFORM, AND LOAD DATA INTO DATABASE
     # Initializing an instance of the Dataloader class will by default load data for the current + previous 5 days (reloaded in case of updates) into the database
     try:
-        dataloader = Dataloader(run_date=date_dt)
+        Dataloader(run_date=date_dt)
     except Exception as ex:
         tb = "".join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f"Error with loading daily data into db!", tb)
@@ -77,8 +83,6 @@ def main(argv):
     # PLOT OF EXPENSES USING MORE MODULAR CLASS METHODS
     # CURRENTLY ONLY "EXPENSE REPORT" IS RUNNING FROM THIS, PLANNING TO INTEGRATE OTHER REPORTS
     try:
-        from src.generate_overview_abstractclasses import ExpenseGridReport
-
         output_filenames.insert(1, ExpenseGridReport(report_date=date_dt).run())
     except Exception as ex:
         tb = "".join(traceback.TracebackException.from_exception(ex).format())
