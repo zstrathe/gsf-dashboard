@@ -22,9 +22,17 @@ class DashApp:
     def __init__(self, debug_opt=False):
         app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-        date_range_options = get_available_date_range(db_engine='gsf_data')
+        # print('Getting date options...')
+        # date_range_options = get_available_date_range(db_engine='gsf_data')
 
         app.layout = dbc.Container([
+            
+            dcc.Interval(
+                id='interval-component',
+                interval=300000, # 5 minutes in milliseconds
+                n_intervals=0
+            ),
+
             dbc.Row([
                 dbc.Col([
                     html.H1("GSF Reports")
@@ -36,10 +44,10 @@ class DashApp:
                 dbc.Col([
                     dcc.DatePickerSingle(
                         id='dropdown-date-selection',
-                        min_date_allowed=date_range_options[0],
-                        max_date_allowed=date_range_options[-1],
-                        initial_visible_month=date_range_options[-1],
-                        date=date_range_options[-1],
+                        # min_date_allowed=date_range_options[0],
+                        # max_date_allowed=date_range_options[-1],
+                        # initial_visible_month=date_range_options[-1],
+                        # date=date_range_options[-1],
                         placeholder='Select a date')
                 ], style={'textAlign': 'left'}, width=1)
              ], justify='center'),
@@ -61,6 +69,18 @@ class DashApp:
                ], style={'textAlign': 'center'})
             ]),
         ], fluid=True)
+
+        @callback(
+            [Output('dropdown-date-selection', 'min_date_allowed'),
+             Output('dropdown-date-selection', 'max_date_allowed'),
+             Output('dropdown-date-selection', 'initial_visible_month'),
+             Output('dropdown-date-selection', 'date')],
+            Input('interval-component', 'n_intervals')
+        )
+        def update_date_range_options(n):
+            print('Getting date options...')
+            date_range_options = get_available_date_range(db_engine='gsf_data')
+            return (date_range_options[0], date_range_options[-1], date_range_options[-1], date_range_options[-1])
 
         @callback(
             Output('graph-content', 'src'),
@@ -97,8 +117,9 @@ class DashApp:
             # close the figure to release it from memory
             plt.close(fig)
             return fig_img
-            
-        app.run(debug=debug_opt)
+
+        # run app, host must be '0.0.0.0' to be accessible when deployed via docker    
+        app.run(debug=debug_opt, port=8051, host='0.0.0.0')
 
 if __name__ == '__main__':
 	DashApp(debug_opt=True)
