@@ -1516,7 +1516,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
                 axis=1,
             )
 
-            # fill in n/a values in 'est_harvested_mass', 'est_split_in_mass', and 'est_split_out_mass' so that .rolling().sum(numeric_only=True) to calculate rolling sums (otherwise NaN values will cause it to not work)
+            # fill in n/a values in 'est_harvested_mass', 'est_split_in_mass', and 'est_split_out_mass' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
             calc_df.loc[mask, "est_harvested_mass"] = calc_df.loc[
                 mask, "est_harvested_mass"
             ].fillna(0)
@@ -1532,11 +1532,11 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # then get a 6-day rolling sum of harvests and net splits which does not include the current day (by shifting by 1 day)
             # without doing this, then harvests/splits would be double counted in the overall mass comparison
             calc_df.loc[mask, "rolling_7d_harvested_mass_out"] = (
-                calc_df.loc[mask, "est_harvested_mass"].shift(1).rolling("6d").sum(numeric_only=True)
+                calc_df.loc[mask, "est_harvested_mass"].shift(1).rolling("6d").sum()
             )
             calc_df.loc[mask, "rolling_7d_split_net_mass_out"] = (
-                calc_df.loc[mask, "est_split_out_mass"].shift(1).rolling("6d").sum(numeric_only=True)
-                - calc_df.loc[mask, "est_split_in_mass"].shift(1).rolling("6d").sum(numeric_only=True)
+                calc_df.loc[mask, "est_split_out_mass"].shift(1).rolling("6d").sum()
+                - calc_df.loc[mask, "est_split_in_mass"].shift(1).rolling("6d").sum()
             )
 
             # get the 'liters', 'normalized liters' from 7-days ago, using "harvest corrected" columns
@@ -1582,34 +1582,34 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             calc_df.loc[mask, "running_avg_growth_5d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("5d", min_periods=5)
-                .sum(numeric_only=True)
+                .sum()
                 / calc_df.loc[mask, "growth_ref_prev_liters_7d"]
                 .rolling("5d", min_periods=5)
-                .sum(numeric_only=True)
+                .sum()
             )
             calc_df.loc[mask, "running_avg_norm_growth_5d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("5d", min_periods=5)
-                .sum(numeric_only=True)
+                .sum()
                 / calc_df.loc[mask, "growth_ref_prev_norm_liters_7d"]
                 .rolling("5d", min_periods=5)
-                .sum(numeric_only=True)
+                .sum()
             )
             calc_df.loc[mask, "running_avg_growth_14d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("14d", min_periods=14)
-                .sum(numeric_only=True)
+                .sum()
                 / calc_df.loc[mask, "growth_ref_prev_liters_7d"]
                 .rolling("14d", min_periods=14)
-                .sum(numeric_only=True)
+                .sum()
             )
             calc_df.loc[mask, "running_avg_norm_growth_14d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("14d", min_periods=14)
-                .sum(numeric_only=True)
+                .sum()
                 / calc_df.loc[mask, "growth_ref_prev_norm_liters_7d"]
                 .rolling("14d", min_periods=14)
-                .sum(numeric_only=True)
+                .sum()
             )
 
         # reset index so that 'Date' is a column again
@@ -1684,34 +1684,34 @@ class CalcMassGrowthAggregate(DBColumnsBase):
         agg_growth_df["agg_running_avg_growth_5d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("5d", min_periods=5)
-            .sum(numeric_only=True)
+            .sum()
             / agg_growth_df["growth_ref_prev_liters_7d"]
             .rolling("5d", min_periods=5)
-            .sum(numeric_only=True)
+            .sum()
         )
         agg_growth_df["agg_running_avg_norm_growth_5d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("5d", min_periods=5)
-            .sum(numeric_only=True)
+            .sum()
             / agg_growth_df["growth_ref_prev_norm_liters_7d"]
             .rolling("5d", min_periods=5)
-            .sum(numeric_only=True)
+            .sum()
         )
         agg_growth_df["agg_running_avg_growth_14d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("14d", min_periods=14)
-            .sum(numeric_only=True)
+            .sum()
             / agg_growth_df["growth_ref_prev_liters_7d"]
             .rolling("14d", min_periods=14)
-            .sum(numeric_only=True)
+            .sum()
         )
         agg_growth_df["agg_running_avg_norm_growth_14d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("14d", min_periods=14)
-            .sum(numeric_only=True)
+            .sum()
             / agg_growth_df["growth_ref_prev_norm_liters_7d"]
             .rolling("14d", min_periods=14)
-            .sum(numeric_only=True)
+            .sum()
         )
 
         # reset index so that Date is a column
