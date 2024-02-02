@@ -108,6 +108,15 @@ class Dataloader:
             data_etl_class_obj(**param_kwargs)
             completed_etl_name_list.append(data_etl_class_obj.__name__)
 
+        # create a df containing the dates that were updated, and update in the 'available_dates' table in db
+        _dates_df = pd.DataFrame({'Date': pd.date_range(run_date_start, run_date_end)})
+        update_table_rows_from_df(
+            db_engine=self.db_engine,
+            db_table_name='available_dates',
+            update_data_df=_dates_df,
+            pk_cols=['Date']
+        )
+
         print("Finished with daily data updates to DB!")
 
     def rebuild_db(self, start_date: str, end_date: str) -> None:
@@ -120,12 +129,12 @@ class Dataloader:
         start_date = datetime.strptime(start_date, "%Y-%m-%d")
         end_date = datetime.strptime(end_date, "%Y-%m-%d")
 
-        # initialize database tables from CREATE TABLE statements stored in ./settings/db_schemas/
+        # initialize database tables from CREATE TABLE statements stored in ./db/db_schemas/
         # could just let pd.to_sql() create the tables, but this allows additional flexibility with setting contstraints, etc.
         def init_tables():
             db_schema_files = [
                 f.name.split(".")[0]
-                for f in Path().glob("settings/db_schemas/*.create_table")
+                for f in Path().glob("db/db_schemas/*.create_table")
             ]
             for table_name in db_schema_files:
                 init_db_table(self.db_engine, table_name)
@@ -150,6 +159,7 @@ class Dataloader:
 
     def rebuild_data_class(self, class_name: str) -> None:
         """
+        UNFINISHED
         TODO:
             - get dependent classes from data class
             - get existing data date range and use for rebuilding
@@ -580,7 +590,7 @@ class DailyDataLoad(DBColumnsBase):
         specify_date = datetime.strptime(specify_date, "%Y-%m-%d")
 
         folder_id = load_setting("folder_ids")["daily_data"]
-        for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
+        for year_dir in self.account.get_sharepoint_folder_by_id(folder_id):
             # first look for the "year" directory
             if year_dir.name == str(specify_date.year):
                 # look within the year subdirectory
@@ -1506,7 +1516,7 @@ class CalcMassGrowthPerPond(DBColumnsBase):
                 axis=1,
             )
 
-            # fill in n/a values in 'est_harvested_mass', 'est_split_in_mass', and 'est_split_out_mass' so that .rolling().sum() to calculate rolling sums (otherwise NaN values will cause it to not work)
+            # fill in n/a values in 'est_harvested_mass', 'est_split_in_mass', and 'est_split_out_mass' so that .rolling().sum(numeric_only=True) to calculate rolling sums (otherwise NaN values will cause it to not work)
             calc_df.loc[mask, "est_harvested_mass"] = calc_df.loc[
                 mask, "est_harvested_mass"
             ].fillna(0)
@@ -1522,11 +1532,11 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             # then get a 6-day rolling sum of harvests and net splits which does not include the current day (by shifting by 1 day)
             # without doing this, then harvests/splits would be double counted in the overall mass comparison
             calc_df.loc[mask, "rolling_7d_harvested_mass_out"] = (
-                calc_df.loc[mask, "est_harvested_mass"].shift(1).rolling("6d").sum()
+                calc_df.loc[mask, "est_harvested_mass"].shift(1).rolling("6d").sum(numeric_only=True)
             )
             calc_df.loc[mask, "rolling_7d_split_net_mass_out"] = (
-                calc_df.loc[mask, "est_split_out_mass"].shift(1).rolling("6d").sum()
-                - calc_df.loc[mask, "est_split_in_mass"].shift(1).rolling("6d").sum()
+                calc_df.loc[mask, "est_split_out_mass"].shift(1).rolling("6d").sum(numeric_only=True)
+                - calc_df.loc[mask, "est_split_in_mass"].shift(1).rolling("6d").sum(numeric_only=True)
             )
 
             # get the 'liters', 'normalized liters' from 7-days ago, using "harvest corrected" columns
@@ -1572,34 +1582,34 @@ class CalcMassGrowthPerPond(DBColumnsBase):
             calc_df.loc[mask, "running_avg_growth_5d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("5d", min_periods=5)
-                .sum()
+                .sum(numeric_only=True)
                 / calc_df.loc[mask, "growth_ref_prev_liters_7d"]
                 .rolling("5d", min_periods=5)
-                .sum()
+                .sum(numeric_only=True)
             )
             calc_df.loc[mask, "running_avg_norm_growth_5d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("5d", min_periods=5)
-                .sum()
+                .sum(numeric_only=True)
                 / calc_df.loc[mask, "growth_ref_prev_norm_liters_7d"]
                 .rolling("5d", min_periods=5)
-                .sum()
+                .sum(numeric_only=True)
             )
             calc_df.loc[mask, "running_avg_growth_14d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("14d", min_periods=14)
-                .sum()
+                .sum(numeric_only=True)
                 / calc_df.loc[mask, "growth_ref_prev_liters_7d"]
                 .rolling("14d", min_periods=14)
-                .sum()
+                .sum(numeric_only=True)
             )
             calc_df.loc[mask, "running_avg_norm_growth_14d"] = (
                 calc_df.loc[mask, "growth_ref_mass_change_grams_7d"]
                 .rolling("14d", min_periods=14)
-                .sum()
+                .sum(numeric_only=True)
                 / calc_df.loc[mask, "growth_ref_prev_norm_liters_7d"]
                 .rolling("14d", min_periods=14)
-                .sum()
+                .sum(numeric_only=True)
             )
 
         # reset index so that 'Date' is a column again
@@ -1668,40 +1678,40 @@ class CalcMassGrowthAggregate(DBColumnsBase):
                 "growth_ref_prev_norm_liters_7d",
             ],
         )
-        agg_growth_df = agg_growth_df.groupby(by="Date").sum()
+        agg_growth_df = agg_growth_df.groupby(by="Date").sum(numeric_only=True)
 
         # calculate running average growth
         agg_growth_df["agg_running_avg_growth_5d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("5d", min_periods=5)
-            .sum()
+            .sum(numeric_only=True)
             / agg_growth_df["growth_ref_prev_liters_7d"]
             .rolling("5d", min_periods=5)
-            .sum()
+            .sum(numeric_only=True)
         )
         agg_growth_df["agg_running_avg_norm_growth_5d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("5d", min_periods=5)
-            .sum()
+            .sum(numeric_only=True)
             / agg_growth_df["growth_ref_prev_norm_liters_7d"]
             .rolling("5d", min_periods=5)
-            .sum()
+            .sum(numeric_only=True)
         )
         agg_growth_df["agg_running_avg_growth_14d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("14d", min_periods=14)
-            .sum()
+            .sum(numeric_only=True)
             / agg_growth_df["growth_ref_prev_liters_7d"]
             .rolling("14d", min_periods=14)
-            .sum()
+            .sum(numeric_only=True)
         )
         agg_growth_df["agg_running_avg_norm_growth_14d"] = (
             agg_growth_df["growth_ref_mass_change_grams_7d"]
             .rolling("14d", min_periods=14)
-            .sum()
+            .sum(numeric_only=True)
             / agg_growth_df["growth_ref_prev_norm_liters_7d"]
             .rolling("14d", min_periods=14)
-            .sum()
+            .sum(numeric_only=True)
         )
 
         # reset index so that Date is a column
@@ -2622,7 +2632,7 @@ class HarvestDataLoad(DBColumnsBase):
         specify_date = datetime(data_year, data_month, 1)
 
         folder_id = load_setting("folder_ids")["harvest_data"]
-        for year_dir in self.account.get_sharepoint_file_by_id(folder_id).get_items():
+        for year_dir in self.account.get_sharepoint_folder_by_id(folder_id):
             # first look for the "year" directory
             if year_dir.name == str(specify_date.year):
                 # look within the year subdirectory
