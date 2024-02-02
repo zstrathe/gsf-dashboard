@@ -189,18 +189,20 @@ def update_table_rows_from_df(
         insert_rows_result = conn.execute(sql_insert_keys_stmt)
         print("New rows inserted:", insert_rows_result.rowcount)
 
-        # insert data and verify update by checking rowcount between update_data_df and the SQL result
-        # Rollback transaction if rowcounts are not equal (Error condition, possibly because of duplicate rows in the update_data_df)
-        update_result = conn.execute(sql_update_stmt)
-        if update_result.rowcount == len(update_data_df):
-            print("Rows successfully updated:", update_result.rowcount)
-            return True
-        else:
-            print(
-                f"Error updating table rows, number of row updates ({update_result.rowcount}) does not match source dataframe length ({len(update_data_df)})! Possibly due to duplicate rows? Rolling back db transaction..."
-            )
-            conn.rollback()
-            return False
+        # check if there is any data to update (i.e., if it's just a table of dates only, then the date column has already been added, so do nothing)
+        if len(update_col_names) > 0:
+            # insert data and verify update by checking rowcount between update_data_df and the SQL result
+            # Rollback transaction if rowcounts are not equal (Error condition, possibly because of duplicate rows in the update_data_df)
+            update_result = conn.execute(sql_update_stmt)
+            if update_result.rowcount == len(update_data_df):
+                print("Rows successfully updated:", update_result.rowcount)
+                return True
+            else:
+                print(
+                    f"Error updating table rows, number of row updates ({update_result.rowcount}) does not match source dataframe length ({len(update_data_df)})! Possibly due to duplicate rows? Rolling back db transaction..."
+                )
+                conn.rollback()
+                return False
 
 
 def load_table(db_engine: sqlalchemy.Engine, table_name: str) -> sqlalchemy.Table:
