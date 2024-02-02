@@ -38,6 +38,15 @@ def main(argv):
         required=True,
         help="Date to generate report for in 'yyyy-mm-dd' format; year must be from 2020 to 2023",
     )
+
+    parser.add_argument(
+        "-e",
+        "--email_reports",
+        type=bool,
+        default=False,
+        help="Date to generate report for in 'yyyy-mm-dd' format; year must be from 2020 to 2023",
+    )
+
     parser.add_argument(
         "-t",
         "--test_run",
@@ -48,6 +57,8 @@ def main(argv):
     
     args = parser.parse_args()
 
+    if args.email_reports == False:
+        print('LOADING DATA ONLY (not running reports)')
     if args.test_run:
         print("RUNNING AS TEST")
 
@@ -71,38 +82,39 @@ def main(argv):
         tb = "".join(traceback.TracebackException.from_exception(ex).format())
         failure_notify_email_exit(f"Error with loading daily data into db!", tb)
 
-    ###
-    # GENERATE PLOTS
-    #  - returns output filenames
-    try:
-        output_filenames = PondsOverviewPlots(args.date).output_filenames
-    except Exception as ex:
-        tb = "".join(traceback.TracebackException.from_exception(ex).format())
-        failure_notify_email_exit(f"Error running pond overview script", tb)
+    if args.email_reports:
+        ###
+        # GENERATE PLOTS
+        #  - returns output filenames
+        try:
+            output_filenames = PondsOverviewPlots(args.date).output_filenames
+        except Exception as ex:
+            tb = "".join(traceback.TracebackException.from_exception(ex).format())
+            failure_notify_email_exit(f"Error running pond overview script", tb)
 
-    # PLOT OF EXPENSES USING MORE MODULAR CLASS METHODS
-    # CURRENTLY ONLY "EXPENSE REPORT" IS RUNNING FROM THIS, PLANNING TO INTEGRATE OTHER REPORTS
-    try:
-        output_filenames.insert(1, ExpenseGridReport(report_date=date_dt).run())
-    except Exception as ex:
-        tb = "".join(traceback.TracebackException.from_exception(ex).format())
-        failure_notify_email_exit(f"Error running expense report!", tb)
+        # PLOT OF EXPENSES USING MORE MODULAR CLASS METHODS
+        # CURRENTLY ONLY "EXPENSE REPORT" IS RUNNING FROM THIS, PLANNING TO INTEGRATE OTHER REPORTS
+        try:
+            output_filenames.insert(1, ExpenseGridReport(report_date=date_dt).run())
+        except Exception as ex:
+            tb = "".join(traceback.TracebackException.from_exception(ex).format())
+            failure_notify_email_exit(f"Error running expense report!", tb)
 
-    print("Emailing message with attachment...")
+        print("Emailing message with attachment...")
 
-    if args.test_run == False:
-        email_msg_info = load_setting("email_msg")
-    else:
-        email_msg_info = load_setting("test_msg")
+        if args.test_run == False:
+            email_msg_info = load_setting("email_msg")
+        else:
+            email_msg_info = load_setting("test_msg")
 
-    EmailHandler().send_email(
-        # split recipients on ',' and remove whitespace because ConfigParser imports as a single string, but needs to be a list of each email string
-        recipients=email_msg_info["recipients"],
-        # add date to the end of the email subject
-        subject=f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}',
-        msg_body=email_msg_info["body"],
-        attachments=output_filenames,
-    )
+        EmailHandler().send_email(
+            # split recipients on ',' and remove whitespace because ConfigParser imports as a single string, but needs to be a list of each email string
+            recipients=email_msg_info["recipients"],
+            # add date to the end of the email subject
+            subject=f'{email_msg_info["subject"]} - {datetime.strptime(args.date,"%Y-%m-%d").strftime("%a %b %-d, %Y")}',
+            msg_body=email_msg_info["body"],
+            attachments=output_filenames,
+        )
 
     # exit with status 0 to indicate successful execution
     sys.exit(0)
