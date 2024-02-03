@@ -12,7 +12,7 @@ services:
         target: /usr/src/app/db
     ports:
       - 8051:8051
-    command: python3 src/dash_app/dash_app.py && python3 src/dataloader/scheduler.py
+    command: bash container_wrapper.sh
 
   # dataloader:
   #   build:
