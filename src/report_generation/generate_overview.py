@@ -608,7 +608,7 @@ class PondsOverviewPlots:
                 # set 'non_current_data_flag" to True if using non-current data
                 if pd.isna(curr_depth) or curr_depth <= 0:
                     prev_depth = measurements_df.loc[prev_date_mask]["Depth"].iloc[0]
-                    if not pd.isna(prev_depth) or prev_depth > 0:
+                    if not pd.isna(prev_depth) and prev_depth > 0:
                         measurements_df.loc[curr_date_mask, "Depth"] = prev_depth
                         measurements_df.loc[
                             curr_date_mask, "non_current_data_flag_depth"

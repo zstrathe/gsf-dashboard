@@ -188,9 +188,7 @@ class MSAccount(object):
         while attempt_counter <= 5:
             # use an outer try/except block
             try:
-                print('testetset libs:', self.site_libs.values())
                 for idx, lib in enumerate(self.site_libs.values()):
-                    print('testetsetset checking lib:', lib)
                     # use another inner try/except/finally block, because this is expected to fail on some attempts, since it's
                     # blindly checking each site lib for the file
                     # Raise an exception in the "finally" block
