@@ -29,7 +29,7 @@ from utils.utils import load_setting, redirect_logging_to_file
 
 
 class Dataloader:
-    def __init__(self, run_date: str | None = None, run_automated:bool=False, db_engine_name: str = "gsf_data"):
+    def __init__(self, run_date: str | None, db_engine_name: str = "gsf_data"):
         """
         params:
             - run_date:
@@ -42,18 +42,14 @@ class Dataloader:
         self.db_engine = sqlalchemy.create_engine(
             f"sqlite:///db/{db_engine_name}.db", echo=False
         )
-        if run_date and run_automated:
-            print('ERROR: both "run_date" and "run_automated" args were specified, but only one should be provided! Doing nothing...')
-        elif run_date:
+        
+        if run_date:
             # Normalize run_date to remove potential time data and prevent possible key errors when selecting date range from data
             self.run_date = pd.to_datetime(run_date).normalize()
             # run method to load data on a daily basis
             self.main_run_each_proc(run_date_start=run_date, run_date_end=run_date)
-        elif run_automated:
-            today = datetime.today()
-            self.main_run_each_proc(run_date_start=today, run_date_end=today)
         else:
-            print('ERROR: no arguments were provided for either "run_date" or "run_automated"! Doing nothing...')
+            print('No argument was provided for "run_date" so doing nothing.')
         
 
     def main_run_each_proc(
