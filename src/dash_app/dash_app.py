@@ -22,9 +22,6 @@ class DashApp:
     def __init__(self, debug_opt=False):
         app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-        # print('Getting date options...')
-        # date_range_options = get_available_date_range(db_engine='gsf_data')
-
         app.layout = dbc.Container([
             
             dcc.Interval(
@@ -44,10 +41,6 @@ class DashApp:
                 dbc.Col([
                     dcc.DatePickerSingle(
                         id='dropdown-date-selection',
-                        # min_date_allowed=date_range_options[0],
-                        # max_date_allowed=date_range_options[-1],
-                        # initial_visible_month=date_range_options[-1],
-                        # date=date_range_options[-1],
                         placeholder='Select a date')
                 ], style={'textAlign': 'left'}, width=1)
              ], justify='center'),
@@ -70,18 +63,19 @@ class DashApp:
             ]),
         ], fluid=True)
 
+        # callback to update the available date range from the database
         @callback(
             [Output('dropdown-date-selection', 'min_date_allowed'),
              Output('dropdown-date-selection', 'max_date_allowed'),
-             Output('dropdown-date-selection', 'initial_visible_month'),
-             Output('dropdown-date-selection', 'date')],
+             Output('dropdown-date-selection', 'initial_visible_month')],
             Input('interval-component', 'n_intervals')
         )
         def update_date_range_options(n):
             print('Getting date options...')
             date_range_options = get_available_date_range(db_engine='gsf_data')
-            return (date_range_options[0], date_range_options[-1], date_range_options[-1], date_range_options[-1])
+            return (date_range_options[0], date_range_options[-1], date_range_options[-1])
 
+        # callback to update the selected report based on dropdowns
         @callback(
             Output('graph-content', 'src'),
             [Input('dropdown-date-selection', 'date'),
@@ -102,7 +96,6 @@ class DashApp:
                 case 'Potential Harvests Report':
                     fig = PondsOverviewPlots(select_date=select_date, run_all=False, save_output=False).plot_potential_harvests()
                 case 'Expense Report':
-                    print('Test: report date fro expense report', select_date, type(select_date))
                     fig = ExpenseGridReport(report_date=select_date, save_output=False).run()
                 case _:
                     # Default case, return nothing if no report option selected
