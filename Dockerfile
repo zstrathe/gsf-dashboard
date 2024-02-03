@@ -43,8 +43,4 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 COPY . .
 
 # Expose the port that the application listens on.
-EXPOSE 8050
-
-# Run the application.
-# CMD ECHO "DIrectory listing" && ls 
-# CMD python3 gsf_dash -t True -d '2024-01-25'
+EXPOSE 8051

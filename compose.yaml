@@ -5,20 +5,24 @@ services:
   dashapp:
     build:
       context: .
-    ports:
-      - 8050:8050
-    command: python3 src/dash_app/dash_app.py
-
-  dataloader:
-    build:
-      context: .
     volumes:
-      # bind volume to 
       - ../gsf_dash_settings_private:/usr/src/gsf_dash_settings_private
-    command: python3 src/dataloader -t True -d 2024-02-01
+      - type: bind
+        source: ./db
+        target: /usr/src/app/db
+    ports:
+      - 8051:8051
+    command: python3 src/dash_app/dash_app.py && python3 src/dataloader/scheduler.py
 
-
-
-
+  # dataloader:
+  #   build:
+  #     context: .
+  #   volumes:
+  #     # bind volume to 
+  #     - ../gsf_dash_settings_private:/usr/src/gsf_dash_settings_private
+  #     - type: bind
+  #       source: ./db
+  #       target: /usr/src/app/db
+  #   command: python3 src/dataloader -d 2024-02-02
 
 
