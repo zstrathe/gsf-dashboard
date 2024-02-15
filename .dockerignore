@@ -30,5 +30,10 @@
 **/obj
 **/secrets.dev.yaml
 **/values.dev.yaml
+**/*.ipynb
+**/*.backup
 LICENSE
 README.md
+/settings
+/dev_notebooks
+/output_files/*

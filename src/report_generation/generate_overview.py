@@ -8,6 +8,12 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.patches import Ellipse, Rectangle
 
+# add .packages/ directory to sys.path, so that other relative modules can be imported
+import os
+import sys
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(os.path.dirname(SCRIPT_DIR))
+
 from utils.utils import generate_multipage_pdf
 from utils.db_utils import query_data_table_by_date_range
 
@@ -202,8 +208,6 @@ class PondsOverviewPlots:
         plot_title="Pond Health Overview",
         output_pdf:bool=False
     ):
-        print("Plotting ponds overview...", flush=True)
-
         select_date = self.select_date
 
         def subplot_ax_format(subplot_ax):
@@ -1240,61 +1244,66 @@ class PondsOverviewPlots:
                         table_name="daily_processing_data",
                         query_date_start=self.select_date - pd.Timedelta(days=1),
                         query_date_end=self.select_date - pd.Timedelta(days=1),
-                    ).iloc[0]
+                        raise_exception_on_error=False
+                    )
+                    if len(prev_date_processing_data) == 0:
+                        processing_data_str += '\nData unavailable'
+                    else:
+                        prev_date_processing_data = prev_date_processing_data.iloc[0]
 
-                    for label, subdict in processing_columns.items():
-                        # when 'column_name' is a list, get the first item with data (so first item in list is primary source)
-                        if isinstance(subdict["column_name"], list):
-                            for data_col_name in subdict["column_name"]:
-                                # force the data item to the 'data_format' type, with try/except to catch errors
+                        for label, subdict in processing_columns.items():
+                            # when 'column_name' is a list, get the first item with data (so first item in list is primary source)
+                            if isinstance(subdict["column_name"], list):
+                                for data_col_name in subdict["column_name"]:
+                                    # force the data item to the 'data_format' type, with try/except to catch errors
+                                    try:
+                                        data_i = prev_date_processing_data[data_col_name]
+                                        if (
+                                            subdict["data_format"] == str
+                                            and (data_i != "" or data_i != "nan")
+                                        ) or (
+                                            subdict["data_format"] != str
+                                            and not pd.isna(data_i)
+                                            and data_i > 0
+                                        ):
+                                            prev_day_val = data_i
+                                            # if valid data is found, then break and stop evaluating any more columns
+                                            break
+                                        else:
+                                            prev_day_val = None
+                                    except:
+                                        prev_day_val = None
+                            else:
                                 try:
-                                    data_i = prev_date_processing_data[data_col_name]
+                                    prev_day_val = prev_date_processing_data[
+                                        subdict["column_name"]
+                                    ]
                                     if (
                                         subdict["data_format"] == str
-                                        and (data_i != "" or data_i != "nan")
+                                        and (prev_day_val == "" or prev_day_val == "nan")
                                     ) or (
-                                        subdict["data_format"] != str
-                                        and not pd.isna(data_i)
-                                        and data_i > 0
+                                        subdict["data_format"] != str and prev_day_val == 0
                                     ):
-                                        prev_day_val = data_i
-                                        # if valid data is found, then break and stop evaluating any more columns
-                                        break
-                                    else:
                                         prev_day_val = None
                                 except:
                                     prev_day_val = None
-                        else:
-                            try:
-                                prev_day_val = prev_date_processing_data[
-                                    subdict["column_name"]
-                                ]
-                                if (
-                                    subdict["data_format"] == str
-                                    and (prev_day_val == "" or prev_day_val == "nan")
-                                ) or (
-                                    subdict["data_format"] != str and prev_day_val == 0
-                                ):
-                                    prev_day_val = None
-                            except:
-                                prev_day_val = None
 
-                        if pd.isna(prev_day_val):
-                            if subdict["data_format"] == str:
-                                prev_day_val = ""
-                            else:
-                                prev_day_val = 0
+                            if pd.isna(prev_day_val):
+                                if subdict["data_format"] == str:
+                                    prev_day_val = ""
+                                else:
+                                    prev_day_val = 0
 
-                        prev_day_val = subdict["data_format"](prev_day_val)
+                            prev_day_val = subdict["data_format"](prev_day_val)
 
-                        if type(prev_day_val) == str:
-                            prev_day_val = prev_day_val.replace("/ ", "\n  ").replace(
-                                ". ", ".\n  "
-                            )
-                            processing_data_str += f"\n{label}\n  {prev_day_val}"
-                        elif type(prev_day_val) != str:
-                            prev_day_val = f'{subdict["data_format"](prev_day_val):,} {subdict["str_label"]}'
-                            processing_data_str += f"\n{label} {prev_day_val}"
+                            if type(prev_day_val) == str:
+                                prev_day_val = prev_day_val.replace("/ ", "\n  ").replace(
+                                    ". ", ".\n  "
+                                )
+                                processing_data_str += f"\n{label}\n  {prev_day_val}"
+                            elif type(prev_day_val) != str:
+                                prev_day_val = f'{subdict["data_format"](prev_day_val):,} {subdict["str_label"]}'
+                                processing_data_str += f"\n{label} {prev_day_val}"
 
                     proc_t.update({"text": processing_data_str})
 

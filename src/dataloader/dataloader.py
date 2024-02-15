@@ -7,6 +7,10 @@ from datetime import datetime
 from datetime import date as date_util
 from pathlib import Path
 from dateutil.rrule import rrule, DAILY
+# import warnings to suppress pandas FutureWarnings 
+# using pandas 1.5.3 for this app should not cause issue
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd
 import numpy as np
 import sqlalchemy
@@ -24,6 +28,8 @@ from utils.db_utils import (
     check_if_table_exists,
     get_db_table_columns,
     update_table_rows_from_df,
+    backup_sqlite_db,
+    load_sqlite_db
 )
 from utils.utils import load_setting, redirect_logging_to_file
 
@@ -39,19 +45,28 @@ class Dataloader:
         """
         self.db_engine_name = db_engine_name
         # initialize sqlalchemy engine / sqlite database
-        self.db_engine = sqlalchemy.create_engine(
-            f"sqlite:///db/{db_engine_name}.db", echo=False
-        )
+        self.db_engine = load_sqlite_db(db_engine_name)
         
         if run_date:
             # Normalize run_date to remove potential time data and prevent possible key errors when selecting date range from data
             self.run_date = pd.to_datetime(run_date).normalize()
             # run method to load data on a daily basis
             self.main_run_each_proc(run_date_start=run_date, run_date_end=run_date)
+
+            # backup the sqlite db (necessary when running container in cloud env 
+            # to persist db data between container restarts)
+            backup_sqlite_db(db_engine_name)
+
         else:
             print('No argument was provided for "run_date" so doing nothing.')
-        
-
+            self.db_engine = sqlalchemy.create_engine(
+                f"sqlite:///db/{db_engine_name}.db", echo=False
+            )
+    
+    @redirect_logging_to_file(
+            log_file_directory=Path("db/logs/"),
+            log_file_name=f'{date_util.today().strftime("%y%m%d")}_DAILY.log',
+        )
     def main_run_each_proc(
         self, run_date_start: datetime, run_date_end: datetime
     ) -> None:
@@ -433,8 +448,6 @@ class DailyDataLoad(DBColumnsBase):
                 }
             )
 
-            print('DOCKER TEST:\n', df)
-
             ### Skip sheet if there isn't a "PondID" column present
             # - Do this after cleaning column names due to renaming "Pond" and "Pond ID" columns to "PondID"
             # - might have issues if any sheets don't have the headers starting on the first row
@@ -790,26 +803,23 @@ class EPALoad(DBColumnsBase):
     ]
     # define class dependency that needs to be run prior to an instance of this class
     DEPENDENCY_CLASSES = ["GetActiveStatus"]
-    # override default daily update lookback days (from 5 to 15)
+    # override default daily update lookback days (from 10 to 15)
     MIN_LOOKBACK_DAYS = 15
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def run(self):
-        ## TODO: use data available from M365 api to check if file has been updated, then just store local file and re-download when necessary?
-        if not hasattr(self, "_epa_df"):
-            EPALoad._epa_df = self._download_and_merge_epa_data()
-        epa_df = self._epa_df.copy()
-
+        epa_df = self._download_and_merge_epa_data()
+        
         # filter epa_df based on lookback_days parameter value (lookback_days is days in addition to the run_date, so num of rows returned will be lookback_days+1
         epa_df = epa_df[epa_df["Date"].between(self.run_date_start, self.run_date_end)]
-
+        print('test epa data after filtering:', epa_df)
         # update the db (calling a function from .db_utils.py)
         update_table_rows_from_df(
             db_engine=self.db_engine,
             db_table_name=self.OUT_TABLE_NAME,
-            update_data_df=epa_df,
+            update_data_df=epa_df
         )
 
     def _download_and_merge_epa_data(self) -> pd.DataFrame:

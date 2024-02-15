@@ -150,6 +150,10 @@ class BasePondsGridReport(ABC, BaseReportProperties):
         # self.fig.text(0.125, 0.01, 'test figure text', ha='left', va='top')
         self.plot_annotations()
 
+        # reset matplotlib rcParams (default font size, etc)
+        # otherwise, other plots generated with matplotlib may have wrong font sizes 
+        plt.rcdefaults()
+
        # self.fig.show()
         if self.save_output:
             out_path = Path(

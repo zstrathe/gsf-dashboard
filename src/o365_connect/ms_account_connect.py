@@ -1,5 +1,5 @@
 import pandas as pd
-from urllib.error import HTTPError
+from requests.exceptions import HTTPError # use this HTTPError class because it's what the O365 module uses
 import json
 import os
 import re
@@ -194,7 +194,7 @@ class MSAccount(object):
                     # Raise an exception in the "finally" block
                     try:
                         return lib.get_item(object_id)
-                    except:
+                    except HTTPError:
                         pass
                     
                     if idx+1 == len(self.site_libs.values()):

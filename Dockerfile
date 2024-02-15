@@ -47,3 +47,5 @@ COPY . .
 
 # Expose the port that the application listens on.
 EXPOSE 8051
+
+CMD ["bash", "container_wrapper.sh"]

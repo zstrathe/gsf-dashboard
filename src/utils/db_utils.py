@@ -5,6 +5,7 @@ import sqlalchemy
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype
 from dateutil.rrule import rrule, DAILY
+from shutil import copy2
 
 
 def get_db_table_columns(db_engine: sqlalchemy.Engine, table_name) -> list:
@@ -150,7 +151,7 @@ def update_table_rows_from_df(
     ## pk_vals formatted as string example for (Date, PondID): "('2023-09-01', '0401'), ('2023-09-02', '0401'), ... "
     sql_insert_keys_stmt = f'INSERT OR IGNORE INTO {db_table_name} ({", ".join(pk_cols) if len(pk_cols) > 1 else pk_cols[0]}) VALUES {pk_vals};'
     sql_insert_keys_stmt = sqlalchemy.text(sql_insert_keys_stmt)
-
+  
     # check that all columns being updated, as well as the primary key column arguments, are present in the database table. raise an exception if not
     db_table_col_names = get_db_table_columns(db_engine, db_table_name)
     # add pk_cols to check list just in case columns were provided that do not exist in db table
@@ -416,3 +417,33 @@ def convert_df_date_cols(df, option: str, dt_format: str = "%Y-%m-%d") -> pd.Dat
                 )
 
     return df
+
+
+def backup_sqlite_db(db_name:str='gsf_data') -> None:
+    '''
+    Function to backup a sqlite db file by copying the "main" file into another directory
+    The use case for this is to backup the file when deployed to a cloud container, with the db backup 
+    directory mapped to a cloud file share. This is so that the file can be persisted between container 
+    restarts (otherwise the db would always be as-of whenever the container image was created.
+    Tbh this is dumb and a proper db like postgres should eventually be implemented to avoid this hassle. 
+    '''
+    db_file_path = Path(f'db/{db_name}.db')
+    backup_file_name = Path(f'db/backup/{db_file_path.name}')
+    copy2(db_file_path, backup_file_name)
+
+
+def load_sqlite_db(db_name:str='gsf_data') -> sqlalchemy.Engine:
+    '''Function to load sqlite db by checking first if there is a backup file that was modified more recently'''
+    db_file_path = Path(f'db/{db_name}.db')
+    backup_file_path = Path(f'db/backup/{db_file_path.name}')
+    if backup_file_path.is_file(): #returns bool
+        db_file_last_mod = os.stat(db_file_path).st_mtime
+        backup_file_last_mod = os.stat(backup_file_path).st_mtime
+        if backup_file_last_mod > db_file_last_mod:
+            copy2(backup_file_path, db_file_path)
+            print('Retrieved db backup!')
+    db_engine = sqlalchemy.create_engine(
+                f"sqlite:///{db_file_path.as_posix()}", echo=False
+    )
+    return db_engine
+

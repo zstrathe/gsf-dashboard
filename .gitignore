@@ -11,3 +11,4 @@ venv/
 dev_notebooks/
 .ipynb_checkpoints/
 *.backup*
+cache-directory

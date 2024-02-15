@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Start the first process
-python3 ./src/dataloader/scheduler.py &
+python3 ./src/automation/scheduler.py &
 
 # Start the second process
 python3 ./src/dash_app/app.py &
