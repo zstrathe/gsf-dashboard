@@ -113,8 +113,9 @@ def serve_layout():
     )
 
 # initialize app before callbacks to define cache
-app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
-app.title = 'GSF Daily Reports'
+app = Dash(__name__, title='GSF Reports', update_title=None, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+# init cache class for storing & retrieving generated reports
 cache = FileCache(cache_dir='cache-directory')
 
 # callback to update the available date range from the database
