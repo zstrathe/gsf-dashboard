@@ -50,7 +50,7 @@ def serve_layout():
                                 )
                             ], direction='horizontal', gap=3, className='float-end')
                         ],
-                    style={'border-style': 'none', 'textAlign': 'right'}, width='auto'),
+                    style={'border-style': 'none', 'textAlign': 'right'}, width=2),
 
                     dbc.Col(
                         [
@@ -83,10 +83,10 @@ def serve_layout():
                                         type='circle',
                                         ),
                                     html.Div(id='hidden-connector-dl', hidden=True)
-                                ], direction='horizontal', gap=3, className='float-end'
+                                ], direction='horizontal', gap=3
                             )
                         ],
-                    style={'border-style': 'none', 'white-space': 'nowrap', }, width='auto')
+                    style={'border-style': 'none', 'white-space': 'nowrap', }, width=3)
                 ], justify='center'
             ),
                    
@@ -140,21 +140,26 @@ def update_date_range_options(_):
 # callback to clear the report when dropdowns are updated
 # this is so that the loading animation will always show right below the dropdowns
 # (otherwise it tends to show far down on the page since it seems to center vertically
-# based on the last image displayed).
+# based on the last image displayed). Also set the loading_state['is_loading'] property of the graph-content
+# obj, so that the Download button isn't displayed until loading is completed (without otherwise needing to pass the 
+# entire generated report to the button callbck for keeping track of this, which adds a slight delay for processing)
 @callback(
     [Output("graph-content", "src"), 
-     Output("hidden-connector", "children")],
+     Output("hidden-connector", "children"),
+     Output('graph-content', 'loading_state')],
     [Input("dropdown-date-selection", "date"),
     Input("dropdown-report-selection", "value")],
     prevent_initial_call=True
 )
-def clear_report_output_when_generating_new(selected_date, selected_report):
-    return None, [selected_date, selected_report]
+def init_new_report_output(selected_date, selected_report):
+    loading_state = {'is_loading': True}
+    return None, [selected_date, selected_report], loading_state
 
 
 # callback to update the selected report based on dropdowns
 @callback(
-    Output("graph-content", "src", allow_duplicate=True),
+    [Output("graph-content", "src", allow_duplicate=True),
+     Output('graph-content', 'loading_state', allow_duplicate=True)],
     Input("hidden-connector", "children"),
     prevent_initial_call=True,
 )
@@ -175,7 +180,10 @@ def update_graph(options):
         print('DISPLAY: Found cached report!')
         cache_data = base64.b64encode(cache_data).decode()
         cache_fig = f"data:image/svg+xml;base64,{cache_data}"
-        return cache_fig
+        
+        # set loading state for figure before returning
+        loading_state = {'is_loading': False}
+        return cache_fig, loading_state
 
     # generate figure depending on report selection
     match select_report:
@@ -214,14 +222,20 @@ def update_graph(options):
     # add report to the report cache
     cache.add_cache_item(cache_options, bytes_data)
 
-    return fig_img
+    # set loading state before returning
+    loading_state = {'is_loading': False}
+
+    return fig_img, loading_state
 
 # callback to unhide download button if a report is generated 
 @app.callback(Output("download_button", "hidden"),
-              Input('graph-content', 'src'),
+              [Input('graph-content', 'loading_state'),
+               Input("dropdown-date-selection", "date"),
+               Input("dropdown-report-selection", "value")],
               prevent_initial_call=True)
-def unhide_download_button(fig_img_data):
-    if fig_img_data is not None:
+def unhide_download_button(loading_state, selected_date, selected_report):
+    print('unhide button data, loading_state:', loading_state)
+    if loading_state is not None and loading_state['is_loading'] is False and selected_date is not None and selected_report is not None:
         return False # return False to unset 'hidden' property of download button
     else:
         return True

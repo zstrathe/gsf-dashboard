@@ -1,14 +1,15 @@
 import schedule
 import time
 from datetime import datetime
-from dataloader import Dataloader
-from dash_app.app import regen_figures_in_cache
 
 # add .packages/ directory to sys.path, so that other relative modules can be imported
 import os
 import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(SCRIPT_DIR)) 
+
+from dataloader import Dataloader
+from dash_app.app import regen_figures_in_cache
 
 def job():
     today = datetime.today()
