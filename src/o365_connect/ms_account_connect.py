@@ -821,8 +821,11 @@ class EmailHandler:
         message.subject = subject
         message.body = msg_body
         if attachments:
-            for attachment_path in attachments:
-                message.attachments.add(attachment_path)
+            for att in attachments:
+                # attachment must be passed as a list for custom attachments to work
+                # custom attachments attach as a tuple of list containing: (obj: BytesIO or file path string, name: str)
+                # or just pass the path (as str or Path) of the existing file
+                message.attachments.add([att])
         message.send()
         print("Email sent successfully!")
 
