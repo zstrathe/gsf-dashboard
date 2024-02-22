@@ -10,7 +10,7 @@ sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 from dataloader import Dataloader
 from dash_app.app import regen_figures_in_cache
-from .email_notify import RunWithEmailNotification
+from email_notify import RunWithEmailNotification
 
 def catch_exceptions(cancel_on_failure=False):
     ''' decorator from: 
@@ -35,7 +35,7 @@ def job():
     
     # run an instance of Dataloader class and generate/email reports
     #Dataloader(run_date=today)
-    RunWithEmailNotification(date=today, run_dataloader=True, email_reports=True, test_run=True)
+    RunWithEmailNotification(date=today, run_dataloader=True, email_reports=True, test_run=False)
     
     # regenerate the reports in the cache for the dash app
     # this is to ensure that if any data has been updated, then the reports will reflect that

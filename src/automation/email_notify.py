@@ -12,15 +12,10 @@ import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(SCRIPT_DIR)) 
 
-from ..dataloader import Dataloader
-from ..utils.utils import load_setting
-from ..o365_connect import EmailHandler
-from ..report_generation import PondsOverviewPlots, ExpenseGridReport
-
-import functools
-
-# set print function to always flush buffer for running in terminal (i.e., running from a bash script) for ease of realtime monitoring
-print = functools.partial(print, flush=True)
+from dataloader import Dataloader
+from utils.utils import load_setting
+from o365_connect import EmailHandler
+from report_generation import PondsOverviewPlots, ExpenseGridReport
 
 
 class RunWithEmailNotification:

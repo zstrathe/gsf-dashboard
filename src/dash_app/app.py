@@ -234,7 +234,7 @@ def update_graph(options):
                Input("dropdown-report-selection", "value")],
               prevent_initial_call=True)
 def unhide_download_button(loading_state, selected_date, selected_report):
-    print('unhide button data, loading_state:', loading_state)
+
     if loading_state is not None and loading_state['is_loading'] is False and selected_date is not None and selected_report is not None:
         return False # return False to unset 'hidden' property of download button
     else:
