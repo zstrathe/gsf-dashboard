@@ -4,7 +4,7 @@
 python3 ./src/automation/scheduler.py &
 
 # Start the second process
-python3 ./src/dash_app/app.py &
+gunicorn --bind 0.0.0.0:8051 wsgi:application &
 
 # Wait for any process to exit
 wait -n

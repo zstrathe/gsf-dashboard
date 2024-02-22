@@ -114,6 +114,7 @@ def serve_layout():
 
 # initialize app before callbacks to define cache
 app = Dash(__name__, title='GSF Reports', update_title=None, external_stylesheets=[dbc.themes.BOOTSTRAP])
+server = app.server
 
 # init cache class for storing & retrieving generated reports
 cache = FileCache(cache_dir='cache-directory')
@@ -289,7 +290,7 @@ app.layout = serve_layout
 
 if __name__ == "__main__":
     # run app, host must be '0.0.0.0' to be accessible when deployed via docker
-    app.run(debug=False, port=8051, host="0.0.0.0")
+    app.run(debug=True, port=8051, host="0.0.0.0")
 
 
 def regen_figures_in_cache(num_days:int=15):
